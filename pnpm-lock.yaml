@@ -272,6 +272,9 @@ importers:
 
   packages/shared:
     dependencies:
+      dotenv:
+        specifier: ^16.4.5
+        version: 16.6.1
       ethers:
         specifier: ^6.13.2
         version: 6.16.0(bufferutil@4.1.0)(utf-8-validate@5.0.10)

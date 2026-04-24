@@ -27,7 +27,7 @@ export const SwarmConfigSchema = z.object({
   ETH_RPC_URL: z
     .string()
     .url()
-    .default("https://eth-mainnet.g.alchemy.com/v2/demo"),
+    .default("https://eth.llamarpc.com"),
 
   // 0G Compute
   ZG_COMPUTE_RPC: z

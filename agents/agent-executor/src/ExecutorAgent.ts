@@ -7,6 +7,11 @@ import type {
   ExecutionResult,
 } from "@swarm/shared";
 
+// ─── Safety guard ─────────────────────────────────────────────────────────────
+// Set to false ONLY when real on-chain execution is explicitly desired.
+// This overrides DRY_RUN — even DRY_RUN=false will NOT submit transactions.
+const SIMULATION_ONLY = true;
+
 // ─── Uniswap V3 SwapRouter02 ABI (minimal) ────────────────────────────────────
 
 const SWAP_ROUTER_ABI = [
@@ -81,7 +86,12 @@ export class ExecutorAgent {
 
     const cfg = getConfig();
 
-    if (cfg.DRY_RUN) {
+    if (SIMULATION_ONLY || cfg.DRY_RUN) {
+      if (SIMULATION_ONLY && !cfg.DRY_RUN) {
+        logger.warn(
+          "[Executor] SIMULATION_ONLY guard is active — ignoring DRY_RUN=false. No real trade will be submitted."
+        );
+      }
       return await this.simulateTrade(strategy);
     }
 

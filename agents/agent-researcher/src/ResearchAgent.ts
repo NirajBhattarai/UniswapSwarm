@@ -25,7 +25,7 @@ interface PoolDef {
 
 const KNOWN_POOLS: PoolDef[] = [
   {
-    address: "0x88e6A0c2ddd26FEEb64F039a2c41296FcB3f5640",
+    address: "0x88e6A0c2dDD26FEEb64F039a2c41296FcB3f5640",
     token0: { symbol: "USDC", name: "USD Coin",       address: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", decimals: 6  },
     token1: { symbol: "WETH", name: "Wrapped Ether",  address: "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2", decimals: 18 },
     feeTier: 500, invertPrice: true,  priceLabel: "WETH in USDC",
@@ -55,7 +55,7 @@ const KNOWN_POOLS: PoolDef[] = [
     feeTier: 3000, invertPrice: false, priceLabel: "WETH per WBTC",
   },
   {
-    address: "0x4585FE77225b41b697C938B018E2ac67Ac5a20c0",
+    address: "0x4585FE77225b41b697C938B018E2Ac67Ac5a20c0",
     token0: { symbol: "WBTC",  name: "Wrapped Bitcoin", address: "0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599", decimals: 8  },
     token1: { symbol: "WETH",  name: "Wrapped Ether",   address: "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2", decimals: 18 },
     feeTier: 500, invertPrice: false, priceLabel: "WETH per WBTC",
@@ -79,7 +79,7 @@ const KNOWN_POOLS: PoolDef[] = [
     feeTier: 3000, invertPrice: false, priceLabel: "WETH per LINK",
   },
   {
-    address: "0x1d42064Fc4Beb5F8aaf85F4617AE8b3b5B8Bd801",
+    address: "0x1d42064Fc4Beb5F8aAF85F4617AE8b3b5B8Bd801",
     token0: { symbol: "UNI",   name: "Uniswap",         address: "0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984", decimals: 18 },
     token1: { symbol: "WETH",  name: "Wrapped Ether",   address: "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2", decimals: 18 },
     feeTier: 3000, invertPrice: false, priceLabel: "WETH per UNI",
@@ -204,7 +204,12 @@ export class ResearchAgent {
 
   private async fetchOnChainPools(): Promise<PoolSnapshot[]> {
     const { ETH_RPC_URL } = getConfig();
-    const provider = new ethers.JsonRpcProvider(ETH_RPC_URL);
+    // staticNetwork skips auto-detection, preventing "failed to detect network" errors
+    const provider = new ethers.JsonRpcProvider(
+      ETH_RPC_URL,
+      1, // ethereum mainnet
+      { staticNetwork: true }
+    );
 
     const snapshots: PoolSnapshot[] = [];
 
