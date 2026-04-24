@@ -1,53 +1,173 @@
-# Turborepo starter
+# UniswapSwarm
 
-This Turborepo starter is maintained by the Turborepo core team.
+An autonomous AI agent swarm that identifies and executes profitable, low-risk token swaps on **Uniswap V3** (Ethereum mainnet). Built on top of the **0G Compute Network** for verifiable, decentralised LLM inference.
 
-## Using this example
+> **Capital preservation first.** The swarm is tuned to prioritise safety over yield — every trade is planned, researched, risk-scored, strategised, and critiqued before execution.
 
-Run the following command:
+---
 
-```sh
-npx create-turbo@latest
+## Architecture
+
+The swarm runs a sequential pipeline of specialised agents that share a common **Blackboard Memory** per cycle:
+
+```
+Planner → Researcher → Risk → Strategy → Critic → Executor
 ```
 
-## What's inside?
+| Agent | Package | Role |
+|---|---|---|
+| **Planner** | `agent-planner` | Breaks the high-level goal into a structured `TradePlan` with tasks and constraints |
+| **Researcher** | `agent-researcher` | Scans Uniswap V3 pools and returns ranked `TokenCandidate` objects |
+| **Risk** | `agent-risk` | Scores each candidate (honeypot, low liquidity, MEV risk, …) and flags unsafe tokens |
+| **Strategy** | `agent-strategy` | Selects the best trade route, sizes the position, and sets slippage/fee parameters |
+| **Critic** | `agent-critic` | Reviews the fully assembled plan and approves or rejects it with a confidence score |
+| **Executor** | `agent-executor` | Submits the swap via Uniswap V3's `SwapRouter` (supports dry-run mode) |
 
-This Turborepo includes the following packages/apps:
+All LLM calls go through `@swarm/compute` — a thin wrapper around the [0G Serving Broker](https://github.com/0glabs/0g-serving-broker) that auto-manages ledger deposits and provider acknowledgement.
 
-### Apps and Packages
+---
 
-- `docs`: a [Next.js](https://nextjs.org/) app
-- `web`: another [Next.js](https://nextjs.org/) app
-- `@repo/ui`: a stub React component library shared by both `web` and `docs` applications
-- `@repo/eslint-config`: `eslint` configurations (includes `eslint-config-next` and `eslint-config-prettier`)
-- `@repo/typescript-config`: `tsconfig.json`s used throughout the monorepo
+## Monorepo Structure
 
-Each package/app is 100% [TypeScript](https://www.typescriptlang.org/).
-
-### Utilities
-
-This Turborepo has some additional tools already setup for you:
-
-- [TypeScript](https://www.typescriptlang.org/) for static type checking
-- [ESLint](https://eslint.org/) for code linting
-- [Prettier](https://prettier.io) for code formatting
-
-### Build
-
-To build all apps and packages, run the following command:
-
-With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed (recommended):
-
-```sh
-cd my-turborepo
-turbo build
+```
+uniswapswarm/
+├── apps/
+│   └── orchestrator/       # Express REST server + cycle runner
+├── agents/
+│   ├── agent-planner/
+│   ├── agent-researcher/
+│   ├── agent-risk/
+│   ├── agent-strategy/
+│   ├── agent-critic/
+│   └── agent-executor/
+└── packages/
+    ├── compute/            # 0G Compute Network client (ZGCompute)
+    ├── memory/             # BlackboardMemory — shared agent state per cycle
+    ├── shared/             # Config, types, logger, constants
+    ├── eslint-config/
+    └── typescript-config/
 ```
 
-Without global `turbo`, use your package manager:
+Built with [Turborepo](https://turbo.build/) and [pnpm workspaces](https://pnpm.io/workspaces).
+
+---
+
+## Prerequisites
+
+| Tool | Version |
+|---|---|
+| Node.js | ≥ 20 |
+| pnpm | ≥ 9 |
+| A funded 0G wallet | See [0G docs](https://docs.0g.ai) |
+
+---
+
+## Setup
+
+### 1. Clone and install
 
 ```sh
-cd my-turborepo
-npx turbo build
+git clone git@github.com:NirajBhattarai/UniswapSwarm.git
+cd UniswapSwarm
+pnpm install
+```
+
+### 2. Configure environment
+
+Copy the example and fill in your keys:
+
+```sh
+cp .env.example .env
+```
+
+| Variable | Description |
+|---|---|
+| `ZG_PRIVATE_KEY` | Private key of a funded 0G wallet (64-char hex, no `0x`) |
+| `ZG_CHAIN_RPC` | 0G EVM RPC (default: `https://evmrpc-testnet.0g.ai`) |
+| `ETH_RPC_URL` | Ethereum mainnet RPC (Alchemy / Infura) |
+| `ZG_COMPUTE_RPC` | 0G Compute indexer RPC |
+| `MAX_SLIPPAGE_PCT` | Maximum swap slippage % (default: `1.5`) |
+| `MAX_POSITION_USDC` | Maximum position size in USDC (default: `50`) |
+| `MIN_LIQUIDITY_USD` | Minimum pool liquidity required (default: `100000`) |
+| `MAX_GAS_GWEI` | Gas price ceiling in Gwei (default: `30`) |
+| `RISK_SCORE_THRESHOLD` | Minimum risk score to proceed (0–100, default: `70`) |
+| `DRY_RUN` | Set `true` to simulate swaps without submitting on-chain |
+
+### 3. Build
+
+```sh
+pnpm build
+```
+
+---
+
+## Running
+
+### REST server (recommended)
+
+```sh
+pnpm --filter orchestrator start
+```
+
+The server starts on port `3000` by default.
+
+#### Endpoints
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/health` | Liveness check |
+| `POST` | `/cycle` | Run one full agent cycle (blocking JSON response) |
+| `POST` | `/cycle/stream` | Run one full agent cycle with SSE event streaming |
+
+### Single cycle (CLI)
+
+```sh
+pnpm --filter orchestrator dev
+```
+
+---
+
+## How a Cycle Works
+
+1. **Planner** receives the static goal and produces a `TradePlan` (strategy type, constraints, task list).
+2. **Researcher** fetches live Uniswap V3 pool data and scores token candidates by volume, liquidity, and price momentum.
+3. **Risk Agent** runs each candidate through a suite of checks (honeypot detection, ownership concentration, MEV exposure, …) and produces a `RiskAssessment`.
+4. **Strategy Agent** picks the highest-scoring safe candidate and crafts an exact swap calldata spec (`TradeStrategy`).
+5. **Critic Agent** performs a final holistic review and either approves or rejects the plan.
+6. **Executor** — if approved — calls Uniswap V3's `SwapRouter`. In `DRY_RUN=true` mode it logs the would-be transaction without sending it.
+
+All intermediate outputs are written to the shared `BlackboardMemory` so every downstream agent can read what came before it.
+
+---
+
+## Development
+
+```sh
+# Type-check all packages
+pnpm typecheck
+
+# Lint
+pnpm lint
+
+# Build with watch (individual package)
+pnpm --filter @swarm/compute dev
+```
+
+---
+
+## Key Dependencies
+
+- [`@0glabs/0g-serving-broker`](https://www.npmjs.com/package/@0glabs/0g-serving-broker) — 0G Compute paymaster & inference client
+- [`@uniswap/v3-sdk`](https://www.npmjs.com/package/@uniswap/v3-sdk) — Uniswap V3 quote & routing
+- [`ethers`](https://www.npmjs.com/package/ethers) v6 — Ethereum wallet & provider
+- [`zod`](https://www.npmjs.com/package/zod) — Runtime config validation
+- [`express`](https://www.npmjs.com/package/express) — REST API server
+
+---
+
+## License
+
+MIT
 pnpm dlx turbo build
 pnpm exec turbo build
 ```
