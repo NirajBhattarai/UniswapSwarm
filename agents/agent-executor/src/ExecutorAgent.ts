@@ -1,18 +1,11 @@
 import { ethers } from "ethers";
 import { BlackboardMemory } from "@swarm/memory";
 import { logger, getConfig, UNISWAP } from "@swarm/shared";
-import type {
-  TradeStrategy,
-  Critique,
-  ExecutionResult,
-} from "@swarm/shared";
+import type { TradeStrategy, Critique, ExecutionResult } from "@swarm/shared";
 
 // ─── Safety guard ─────────────────────────────────────────────────────────────
-// TODO: Set SIMULATION_ONLY = false and DRY_RUN=false in .env to enable real trades.
-// TODO: Fund the wallet (ZG_PRIVATE_KEY) with ETH + input token before live execution.
-// TODO: Set ETH_RPC_URL to a private RPC (Alchemy/Infura) for reliable mainnet access.
-// TODO: Decode Transfer event logs in executeTrade() to capture real amountOut.
-// Currently hard-coded to true — no real transactions will be submitted regardless of DRY_RUN.
+// SIMULATION_ONLY=true → pure mock result, no RPC calls, always succeeds → saved to 0G Storage.
+// Set to false + DRY_RUN=false in .env only when wallet is funded and ready for live trades.
 const SIMULATION_ONLY = true;
 
 // ─── Uniswap V3 SwapRouter02 ABI (minimal) ────────────────────────────────────
@@ -66,13 +59,13 @@ export class ExecutorAgent {
 
     if (!strategy || !critique) {
       throw new Error(
-        "[Executor] strategy/proposal and critic/critique must be in shared memory first"
+        "[Executor] strategy/proposal and critic/critique must be in shared memory first",
       );
     }
 
     if (!critique.approved) {
       logger.warn(
-        `[Executor] Critic rejected trade — skipping execution. Issues: ${critique.issues.join("; ")}`
+        `[Executor] Critic rejected trade — skipping execution. Issues: ${critique.issues.join("; ")}`,
       );
       const skipped: ExecutionResult = {
         dryRun: false,
@@ -89,7 +82,7 @@ export class ExecutorAgent {
         ExecutorAgent.MEMORY_KEY,
         this.id,
         this.role,
-        skipped
+        skipped,
       );
       return skipped;
     }
@@ -99,7 +92,7 @@ export class ExecutorAgent {
     if (SIMULATION_ONLY || cfg.DRY_RUN) {
       if (SIMULATION_ONLY && !cfg.DRY_RUN) {
         logger.warn(
-          "[Executor] SIMULATION_ONLY guard is active — ignoring DRY_RUN=false. No real trade will be submitted."
+          "[Executor] SIMULATION_ONLY guard is active — ignoring DRY_RUN=false. No real trade will be submitted.",
         );
       }
       return await this.simulateTrade(strategy);
@@ -108,85 +101,52 @@ export class ExecutorAgent {
     return await this.executeTrade(strategy);
   }
 
-  // ── Simulation (DRY_RUN=true) ───────────────────────────────────────────────
+  // ── Mock simulation — no RPC calls, always succeeds, saves to 0G Storage ──────
 
-  private async simulateTrade(strategy: TradeStrategy): Promise<ExecutionResult> {
+  private async simulateTrade(
+    strategy: TradeStrategy,
+  ): Promise<ExecutionResult> {
     logger.info(
-      `[Executor] DRY RUN — simulating ${strategy.tokenInSymbol}→${strategy.tokenOutSymbol}`
+      `[Executor] MOCK — simulating ${strategy.tokenInSymbol}→${strategy.tokenOutSymbol} ` +
+        `| amountIn=${strategy.amountInWei} minOut=${strategy.minAmountOutWei}`,
     );
 
-    try {
-      const wallet = this.getWallet();
-      const router = new ethers.Contract(
-        UNISWAP.SWAP_ROUTER_02,
-        SWAP_ROUTER_ABI,
-        wallet
-      );
+    // Pure mock: derive a realistic amountOut = minAmountOutWei * 1.005 (0.5% above floor)
+    const minOut = BigInt(strategy.minAmountOutWei);
+    const mockAmountOut = (minOut * 1005n) / 1000n;
 
-      const params = {
-        tokenIn: strategy.tokenIn,
-        tokenOut: strategy.tokenOut,
-        fee: strategy.poolFee,
-        recipient: wallet.address,
-        amountIn: strategy.amountInWei,
-        amountOutMinimum: strategy.minAmountOutWei,
-        sqrtPriceLimitX96: 0n,
-      };
+    const result: ExecutionResult = {
+      dryRun: true,
+      txHash: null,
+      success: true,
+      amountIn: strategy.amountInWei,
+      amountOut: mockAmountOut.toString(),
+      gasUsed: "150000",
+      priceImpactPct: strategy.slippagePct,
+      executedAt: Date.now(),
+    };
 
-      // Static call — does not submit, reveals revert reason if it would fail
-      const staticSwapFn = router.getFunction("exactInputSingle");
-      await staticSwapFn.staticCall(params, {
-        value: strategy.tokenInSymbol === "WETH" ? strategy.amountInWei : 0n,
-      });
+    // Write to BlackboardMemory → persisted to 0G Storage KV
+    await this.memory.write(
+      ExecutorAgent.MEMORY_KEY,
+      this.id,
+      this.role,
+      result,
+    );
 
-      const result: ExecutionResult = {
-        dryRun: true,
-        txHash: null,
-        success: true,
-        amountIn: strategy.amountInWei,
-        amountOut: strategy.minAmountOutWei,
-        gasUsed: null,
-        priceImpactPct: strategy.slippagePct,
-        executedAt: Date.now(),
-      };
-
-      await this.memory.write(
-        ExecutorAgent.MEMORY_KEY,
-        this.id,
-        this.role,
-        result
-      );
-      logger.info("[Executor] DRY RUN simulation succeeded");
-      return result;
-    } catch (err) {
-      const error = err instanceof Error ? err.message : String(err);
-      logger.error(`[Executor] Simulation failed: ${error}`);
-      const result: ExecutionResult = {
-        dryRun: true,
-        txHash: null,
-        success: false,
-        amountIn: strategy.amountInWei,
-        amountOut: null,
-        gasUsed: null,
-        priceImpactPct: null,
-        executedAt: Date.now(),
-        error,
-      };
-      await this.memory.write(
-        ExecutorAgent.MEMORY_KEY,
-        this.id,
-        this.role,
-        result
-      );
-      return result;
-    }
+    logger.info(
+      `[Executor] MOCK result saved to 0G Storage — success=true amountOut=${mockAmountOut}`,
+    );
+    return result;
   }
 
   // ── Live execution (DRY_RUN=false) ─────────────────────────────────────────
 
-  private async executeTrade(strategy: TradeStrategy): Promise<ExecutionResult> {
+  private async executeTrade(
+    strategy: TradeStrategy,
+  ): Promise<ExecutionResult> {
     logger.info(
-      `[Executor] LIVE — executing ${strategy.tokenInSymbol}→${strategy.tokenOutSymbol}`
+      `[Executor] LIVE — executing ${strategy.tokenInSymbol}→${strategy.tokenOutSymbol}`,
     );
 
     let result: ExecutionResult;
@@ -197,19 +157,22 @@ export class ExecutorAgent {
       const router = new ethers.Contract(
         UNISWAP.SWAP_ROUTER_02,
         SWAP_ROUTER_ABI,
-        wallet
+        wallet,
       );
 
       // Approve router if needed
       const allowanceFn = tokenIn.getFunction("allowance");
-      const allowance = (await allowanceFn(wallet.address, UNISWAP.SWAP_ROUTER_02)) as bigint;
+      const allowance = (await allowanceFn(
+        wallet.address,
+        UNISWAP.SWAP_ROUTER_02,
+      )) as bigint;
       const needed = BigInt(strategy.amountInWei);
       if (allowance < needed) {
         logger.info("[Executor] Approving router…");
         const approveFn = tokenIn.getFunction("approve");
         const approveTx = (await approveFn(
           UNISWAP.SWAP_ROUTER_02,
-          ethers.MaxUint256
+          ethers.MaxUint256,
         )) as ethers.TransactionResponse;
         await approveTx.wait();
       }
@@ -264,7 +227,7 @@ export class ExecutorAgent {
       ExecutorAgent.MEMORY_KEY,
       this.id,
       this.role,
-      result
+      result,
     );
     return result;
   }

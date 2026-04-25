@@ -27,15 +27,12 @@ export class BlackboardMemory {
     key: string,
     agentId: string,
     role: string,
-    value: unknown
+    value: unknown,
   ): Promise<MemoryEntry> {
     const json = JSON.stringify(value);
     const hash = this.storage
       ? await this.storage.store(agentId, key, value).catch(() => {
-          const h = crypto
-            .createHash("sha256")
-            .update(json)
-            .digest("hex");
+          const h = crypto.createHash("sha256").update(json).digest("hex");
           return `local:${h}`;
         })
       : `local:${crypto.createHash("sha256").update(json).digest("hex")}`;
@@ -50,9 +47,7 @@ export class BlackboardMemory {
     };
 
     this.cache.set(key, entry);
-    logger.info(
-      `[Memory] ${role} wrote "${key}"  hash=${hash.slice(0, 20)}…`
-    );
+    logger.info(`[Memory] ${role} wrote "${key}"  hash=${hash.slice(0, 20)}…`);
     return entry;
   }
 

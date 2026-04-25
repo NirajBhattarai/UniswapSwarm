@@ -3,7 +3,9 @@ import { SwarmOrchestrator } from "./orchestrator";
 import { getConfig, logger } from "@swarm/shared";
 import type { SwarmEvent } from "@swarm/shared";
 
-export function createServer(orchestrator: SwarmOrchestrator): express.Application {
+export function createServer(
+  orchestrator: SwarmOrchestrator,
+): express.Application {
   const app = express();
   app.use(express.json());
 
@@ -31,32 +33,35 @@ export function createServer(orchestrator: SwarmOrchestrator): express.Applicati
   });
 
   // ── Trigger a cycle with SSE streaming ───────────────────────────────────────
-  app.post("/cycle/stream", async (_req: Request, res: Response): Promise<void> => {
-    if (orchestrator.isRunning()) {
-      res.status(409).json({ error: "A cycle is already running" });
-      return;
-    }
-
-    res.setHeader("Content-Type", "text/event-stream");
-    res.setHeader("Cache-Control", "no-cache");
-    res.setHeader("Connection", "keep-alive");
-    res.flushHeaders();
-
-    const send = (event: SwarmEvent): void => {
-      res.write(`data: ${JSON.stringify(event)}\n\n`);
-    };
-
-    try {
-      orchestrator.setRunning(true);
-      for await (const event of orchestrator.runCycleStream()) {
-        send(event);
+  app.post(
+    "/cycle/stream",
+    async (_req: Request, res: Response): Promise<void> => {
+      if (orchestrator.isRunning()) {
+        res.status(409).json({ error: "A cycle is already running" });
+        return;
       }
-    } finally {
-      orchestrator.setRunning(false);
-      res.write("data: [DONE]\n\n");
-      res.end();
-    }
-  });
+
+      res.setHeader("Content-Type", "text/event-stream");
+      res.setHeader("Cache-Control", "no-cache");
+      res.setHeader("Connection", "keep-alive");
+      res.flushHeaders();
+
+      const send = (event: SwarmEvent): void => {
+        res.write(`data: ${JSON.stringify(event)}\n\n`);
+      };
+
+      try {
+        orchestrator.setRunning(true);
+        for await (const event of orchestrator.runCycleStream()) {
+          send(event);
+        }
+      } finally {
+        orchestrator.setRunning(false);
+        res.write("data: [DONE]\n\n");
+        res.end();
+      }
+    },
+  );
 
   // ── Blackboard memory dump (after a cycle) ─────────────────────────────────────
   app.get("/memory", (_req: Request, res: Response): void => {
@@ -81,19 +86,23 @@ export function createServer(orchestrator: SwarmOrchestrator): express.Applicati
   return app;
 }
 
-export async function startServer(orchestrator: SwarmOrchestrator): Promise<void> {
+export async function startServer(
+  orchestrator: SwarmOrchestrator,
+): Promise<void> {
   const cfg = getConfig();
   const app = createServer(orchestrator);
 
   app.listen(cfg.PORT, "0.0.0.0", () => {
     logger.info(`[API] Uniswap Swarm listening on http://0.0.0.0:${cfg.PORT}`);
-    logger.info(`[API]   POST /cycle          → run one full agent cycle (JSON)`);
+    logger.info(
+      `[API]   POST /cycle          → run one full agent cycle (JSON)`,
+    );
     logger.info(`[API]   POST /cycle/stream   → same but SSE token stream`);
     logger.info(`[API]   GET  /history        → all past cycles`);
     logger.info(`[API]   GET  /latest         → most recent cycle`);
     logger.info(`[API]   GET  /health         → liveness check`);
     logger.info(
-      `[API]   DRY_RUN=${cfg.DRY_RUN ? "true (no real trades)" : "⚠️  false — LIVE TRADING"}`
+      `[API]   DRY_RUN=${cfg.DRY_RUN ? "true (no real trades)" : "⚠️  false — LIVE TRADING"}`,
     );
   });
 }

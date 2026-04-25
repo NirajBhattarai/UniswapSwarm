@@ -81,14 +81,14 @@ export class PlannerAgent {
     const plan = await this.compute.inferJSON<TradePlan>(
       SYSTEM_PROMPT,
       userPrompt,
-      { maxTokens: 1024, ...opts }
+      { maxTokens: 1024, ...opts },
     );
 
     // Hard safety caps — LLM cannot relax these
     plan.constraints.allowUnverified = false;
     plan.constraints.maxSlippagePct = Math.min(
       plan.constraints.maxSlippagePct,
-      cfg.MAX_SLIPPAGE_PCT
+      cfg.MAX_SLIPPAGE_PCT,
     );
 
     plan.createdAt = Date.now();
@@ -96,7 +96,9 @@ export class PlannerAgent {
     // ── Write plan to shared 0G-backed memory ────────────────────────────────
     // Risk, Strategy, Critic, Executor all read this via memory.readValue()
     await this.memory.write(PlannerAgent.MEMORY_KEY, this.id, this.role, plan);
-    logger.info(`[Planner] Plan saved to shared memory — strategy=${plan.strategy}`);
+    logger.info(
+      `[Planner] Plan saved to shared memory — strategy=${plan.strategy}`,
+    );
     return plan;
   }
 }

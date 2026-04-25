@@ -25,6 +25,8 @@ export class ZGCompute {
   private readonly provider: ethers.JsonRpcProvider;
   private readonly wallet: ethers.Wallet;
   private service: ServiceMeta | null = null;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private broker: any | null = null;
 
   constructor() {
     const cfg = getConfig();
@@ -34,14 +36,26 @@ export class ZGCompute {
 
   async init(): Promise<void> {
     logger.info("[Compute] Connecting to 0G Compute Network…");
-    const broker = await createZGComputeNetworkBroker(this.wallet);
+    this.broker = await createZGComputeNetworkBroker(this.wallet);
+    const broker = this.broker;
 
     const services = await broker.inference.listService();
-    const chatbots = services.filter((s: { serviceType: string }) => s.serviceType === "chatbot");
-    if (chatbots.length === 0) throw new Error("[Compute] No chatbot services found on 0G network");
+    const chatbots = services.filter(
+      (s: { serviceType: string }) => s.serviceType === "chatbot",
+    );
+    if (chatbots.length === 0)
+      throw new Error("[Compute] No chatbot services found on 0G network");
 
-    const chosen = chatbots[0] as { provider: string; model: string };
-    logger.info(`[Compute] Provider=${chosen.provider.slice(0, 10)}…  model=${chosen.model}`);
+    // Some service listings include the endpoint URL directly
+    const chosen = chatbots[0] as {
+      provider: string;
+      model: string;
+      url?: string;
+      endpoint?: string;
+    };
+    logger.info(
+      `[Compute] Provider=${chosen.provider.slice(0, 10)}…  model=${chosen.model}`,
+    );
 
     // Ensure ledger funded
     try {
@@ -52,25 +66,47 @@ export class ZGCompute {
       await broker.ledger.depositFund(1);
     }
 
-    // Acknowledge provider (safe to fail if already done)
-    try {
-      await broker.inference.acknowledgeProviderSigner(chosen.provider);
-    } catch {
-      // Already acknowledged
-    }
+    // Both acknowledgeProviderSigner and getServiceMetadata can hang — cap each at 8 s
+    const withTimeout = <T>(
+      p: Promise<T>,
+      ms: number,
+      fallback: T,
+    ): Promise<T> =>
+      Promise.race([
+        p,
+        new Promise<T>((resolve) => setTimeout(() => resolve(fallback), ms)),
+      ]);
 
-    const meta = await broker.inference.getServiceMetadata(chosen.provider) as {
-      endpoint: string;
-      model: string;
-    };
+    // Acknowledge provider (already-acked is fine, timeout is safe)
+    await withTimeout(
+      (
+        broker.inference.acknowledgeProviderSigner(
+          chosen.provider,
+        ) as Promise<unknown>
+      ).catch(() => null),
+      8_000,
+      null,
+    );
+
+    const listingEndpoint: string = chosen.url ?? chosen.endpoint ?? "";
+    const meta = await withTimeout(
+      broker.inference.getServiceMetadata(chosen.provider) as Promise<{
+        endpoint: string;
+        model: string;
+      }>,
+      8_000,
+      { endpoint: listingEndpoint, model: chosen.model },
+    );
 
     this.service = {
       providerAddress: chosen.provider,
-      endpoint: meta.endpoint,
-      model: meta.model,
+      endpoint: meta.endpoint || listingEndpoint,
+      model: meta.model || chosen.model,
     };
 
-    logger.info(`[Compute] Ready — endpoint=${this.service.endpoint}  model=${this.service.model}`);
+    logger.info(
+      `[Compute] Ready — endpoint=${this.service.endpoint || "(unknown)"}  model=${this.service.model}`,
+    );
   }
 
   // ── Non-streaming inference ─────────────────────────────────────────────────
@@ -78,11 +114,14 @@ export class ZGCompute {
   async infer(
     systemPrompt: string,
     userPrompt: string,
-    opts: InferOptions = {}
+    opts: InferOptions = {},
   ): Promise<string> {
     const svc = await this.requireInit();
-    const broker = await createZGComputeNetworkBroker(this.wallet);
-    const headers = await broker.inference.getRequestHeaders(svc.providerAddress) as unknown as Record<string, string>;
+    const broker =
+      this.broker ?? (await createZGComputeNetworkBroker(this.wallet));
+    const headers = (await broker.inference.getRequestHeaders(
+      svc.providerAddress,
+    )) as unknown as Record<string, string>;
 
     const body = JSON.stringify({
       model: svc.model,
@@ -119,11 +158,14 @@ export class ZGCompute {
   async *inferStream(
     systemPrompt: string,
     userPrompt: string,
-    opts: InferOptions = {}
+    opts: InferOptions = {},
   ): AsyncGenerator<string> {
     const svc = await this.requireInit();
-    const broker = await createZGComputeNetworkBroker(this.wallet);
-    const headers = await broker.inference.getRequestHeaders(svc.providerAddress) as unknown as Record<string, string>;
+    const broker =
+      this.broker ?? (await createZGComputeNetworkBroker(this.wallet));
+    const headers = (await broker.inference.getRequestHeaders(
+      svc.providerAddress,
+    )) as unknown as Record<string, string>;
 
     const body = JSON.stringify({
       model: svc.model,
@@ -180,12 +222,55 @@ export class ZGCompute {
   async inferJSON<T>(
     systemPrompt: string,
     userPrompt: string,
-    opts: InferOptions = {}
+    opts: InferOptions = {},
   ): Promise<T> {
     const raw = await this.infer(systemPrompt, userPrompt, opts);
-    const match = raw.match(/```(?:json)?\s*([\s\S]*?)```/);
-    const jsonStr = match?.[1]?.trim() ?? raw.trim();
-    return JSON.parse(jsonStr) as T;
+
+    // 1. Strip markdown code fences if present
+    const stripped = raw
+      .replace(/^```(?:json)?\s*/m, "")
+      .replace(/\s*```\s*$/m, "")
+      .trim();
+
+    // 2. Extract the outermost JSON object (first { to matching last })
+    const firstBrace = stripped.indexOf("{");
+    const lastBrace = stripped.lastIndexOf("}");
+    const jsonStr =
+      firstBrace !== -1 && lastBrace > firstBrace
+        ? stripped.slice(firstBrace, lastBrace + 1)
+        : stripped;
+
+    // 3. Try raw parse first, then apply cleanup passes
+    const tryParse = (s: string): T => JSON.parse(s) as T;
+    try {
+      return tryParse(jsonStr);
+    } catch {
+      // Cleanup: remove trailing commas, JS-style comments, fix missing commas between properties
+      const cleaned = jsonStr
+        .replace(/,\s*([}\]])/g, "$1") // trailing commas
+        .replace(/\/\/[^\n]*/g, "") // // comments
+        .replace(/\/\*[\s\S]*?\*\//g, "") // /* comments */
+        .replace(/(["'\d\]}\w])\s*\n\s*(")/g, "$1,\n$2"); // missing commas between props
+      try {
+        return tryParse(cleaned);
+      } catch {
+        // Last resort: truncate to last valid closing brace
+        for (
+          let i = cleaned.lastIndexOf("}");
+          i > 0;
+          i = cleaned.lastIndexOf("}", i - 1)
+        ) {
+          try {
+            return tryParse(cleaned.slice(0, i + 1));
+          } catch {
+            /* continue */
+          }
+        }
+        throw new Error(
+          `[ZGCompute] Failed to parse JSON from LLM response: ${cleaned.slice(0, 100)}…`,
+        );
+      }
+    }
   }
 
   // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -197,4 +282,3 @@ export class ZGCompute {
     return svc;
   }
 }
-

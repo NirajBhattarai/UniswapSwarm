@@ -49,20 +49,20 @@ export class CriticAgent {
     this.memory = memory;
   }
 
-  async run(
-    opts: InferOptions = {}
-  ): Promise<Critique> {
+  async run(opts: InferOptions = {}): Promise<Critique> {
     logger.info("[Critic] Reading all agent outputs from shared memory…");
 
     // ── Read every prior agent’s output from 0G-backed shared memory ─────────
     const plan = this.memory.readValue<TradePlan>("planner/plan");
     const report = this.memory.readValue<ResearchReport>("researcher/report");
-    const assessments = this.memory.readValue<RiskAssessment[]>("risk/assessments");
-    const strategy = this.memory.readValue<TradeStrategy>("strategy/proposal") ?? null;
+    const assessments =
+      this.memory.readValue<RiskAssessment[]>("risk/assessments");
+    const strategy =
+      this.memory.readValue<TradeStrategy>("strategy/proposal") ?? null;
 
     if (!plan || !report || !assessments) {
       throw new Error(
-        "[Critic] planner/plan, researcher/report, and risk/assessments must be in shared memory first"
+        "[Critic] planner/plan, researcher/report, and risk/assessments must be in shared memory first",
       );
     }
 
@@ -70,15 +70,20 @@ export class CriticAgent {
       const rejection: Critique = {
         approved: false,
         confidence: 100,
-        issues: ["No valid strategy was proposed — all candidates failed risk assessment"],
-        suggestions: ["Wait for better market conditions", "Expand candidate pool"],
+        issues: [
+          "No valid strategy was proposed — all candidates failed risk assessment",
+        ],
+        suggestions: [
+          "Wait for better market conditions",
+          "Expand candidate pool",
+        ],
         summary: "No trade proposed. Automatic rejection — nothing to execute.",
       };
       await this.memory.write(
         CriticAgent.MEMORY_KEY,
         this.id,
         this.role,
-        rejection
+        rejection,
       );
       return rejection;
     }
@@ -88,7 +93,7 @@ export class CriticAgent {
     const userPrompt = [
       `Plan:\n${JSON.stringify(plan, null, 2)}`,
       `Research (${report.candidates.length} candidates):\n${JSON.stringify(
-        report.marketSummary
+        report.marketSummary,
       )}`,
       `Risk assessments:\n${JSON.stringify(assessments, null, 2)}`,
       `Proposed strategy:\n${JSON.stringify(strategy, null, 2)}`,
@@ -100,26 +105,28 @@ export class CriticAgent {
     const critique = await this.compute.inferJSON<Critique>(
       SYSTEM_PROMPT,
       userPrompt,
-      { maxTokens: 1024, ...opts }
+      { maxTokens: 1024, ...opts },
     );
 
     // Hard override: if any critical risk flag exists, force rejection
     const hasCritical = assessments.some((a) =>
-      a.flags.some((f) => f.severity === "critical")
+      a.flags.some((f) => f.severity === "critical"),
     );
     if (hasCritical) {
       critique.approved = false;
-      critique.issues.unshift("HARD VETO: Critical risk flag found in assessments");
+      critique.issues.unshift(
+        "HARD VETO: Critical risk flag found in assessments",
+      );
     }
 
     await this.memory.write(
       CriticAgent.MEMORY_KEY,
       this.id,
       this.role,
-      critique
+      critique,
     );
     logger.info(
-      `[Critic] ${critique.approved ? "✓ APPROVED" : "✗ REJECTED"} — confidence=${critique.confidence}`
+      `[Critic] ${critique.approved ? "✓ APPROVED" : "✗ REJECTED"} — confidence=${critique.confidence}`,
     );
     return critique;
   }

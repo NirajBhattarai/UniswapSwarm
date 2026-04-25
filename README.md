@@ -14,14 +14,14 @@ The swarm runs a sequential pipeline of specialised agents that share a common *
 Planner → Researcher → Risk → Strategy → Critic → Executor
 ```
 
-| Agent | Package | Role |
-|---|---|---|
-| **Planner** | `agent-planner` | Breaks the high-level goal into a structured `TradePlan` with tasks and constraints |
-| **Researcher** | `agent-researcher` | Scans Uniswap V3 pools and returns ranked `TokenCandidate` objects |
-| **Risk** | `agent-risk` | Scores each candidate (honeypot, low liquidity, MEV risk, …) and flags unsafe tokens |
-| **Strategy** | `agent-strategy` | Selects the best trade route, sizes the position, and sets slippage/fee parameters |
-| **Critic** | `agent-critic` | Reviews the fully assembled plan and approves or rejects it with a confidence score |
-| **Executor** | `agent-executor` | Submits the swap via Uniswap V3's `SwapRouter` (supports dry-run mode) |
+| Agent          | Package            | Role                                                                                 |
+| -------------- | ------------------ | ------------------------------------------------------------------------------------ |
+| **Planner**    | `agent-planner`    | Breaks the high-level goal into a structured `TradePlan` with tasks and constraints  |
+| **Researcher** | `agent-researcher` | Scans Uniswap V3 pools and returns ranked `TokenCandidate` objects                   |
+| **Risk**       | `agent-risk`       | Scores each candidate (honeypot, low liquidity, MEV risk, …) and flags unsafe tokens |
+| **Strategy**   | `agent-strategy`   | Selects the best trade route, sizes the position, and sets slippage/fee parameters   |
+| **Critic**     | `agent-critic`     | Reviews the fully assembled plan and approves or rejects it with a confidence score  |
+| **Executor**   | `agent-executor`   | Submits the swap via Uniswap V3's `SwapRouter` (supports dry-run mode)               |
 
 All LLM calls go through `@swarm/compute` — a thin wrapper around the [0G Serving Broker](https://github.com/0glabs/0g-serving-broker) that auto-manages ledger deposits and provider acknowledgement.
 
@@ -54,10 +54,10 @@ Built with [Turborepo](https://turbo.build/) and [pnpm workspaces](https://pnpm.
 
 ## Prerequisites
 
-| Tool | Version |
-|---|---|
-| Node.js | ≥ 20 |
-| pnpm | ≥ 9 |
+| Tool               | Version                           |
+| ------------------ | --------------------------------- |
+| Node.js            | ≥ 20                              |
+| pnpm               | ≥ 9                               |
 | A funded 0G wallet | See [0G docs](https://docs.0g.ai) |
 
 ---
@@ -80,18 +80,18 @@ Copy the example and fill in your keys:
 cp .env.example .env
 ```
 
-| Variable | Description |
-|---|---|
-| `ZG_PRIVATE_KEY` | Private key of a funded 0G wallet (64-char hex, no `0x`) |
-| `ZG_CHAIN_RPC` | 0G EVM RPC (default: `https://evmrpc-testnet.0g.ai`) |
-| `ETH_RPC_URL` | Ethereum mainnet RPC (Alchemy / Infura) |
-| `ZG_COMPUTE_RPC` | 0G Compute indexer RPC |
-| `MAX_SLIPPAGE_PCT` | Maximum swap slippage % (default: `1.5`) |
-| `MAX_POSITION_USDC` | Maximum position size in USDC (default: `50`) |
-| `MIN_LIQUIDITY_USD` | Minimum pool liquidity required (default: `100000`) |
-| `MAX_GAS_GWEI` | Gas price ceiling in Gwei (default: `30`) |
-| `RISK_SCORE_THRESHOLD` | Minimum risk score to proceed (0–100, default: `70`) |
-| `DRY_RUN` | Set `true` to simulate swaps without submitting on-chain |
+| Variable               | Description                                              |
+| ---------------------- | -------------------------------------------------------- |
+| `ZG_PRIVATE_KEY`       | Private key of a funded 0G wallet (64-char hex, no `0x`) |
+| `ZG_CHAIN_RPC`         | 0G EVM RPC (default: `https://evmrpc-testnet.0g.ai`)     |
+| `ETH_RPC_URL`          | Ethereum mainnet RPC (Alchemy / Infura)                  |
+| `ZG_COMPUTE_RPC`       | 0G Compute indexer RPC                                   |
+| `MAX_SLIPPAGE_PCT`     | Maximum swap slippage % (default: `1.5`)                 |
+| `MAX_POSITION_USDC`    | Maximum position size in USDC (default: `50`)            |
+| `MIN_LIQUIDITY_USD`    | Minimum pool liquidity required (default: `100000`)      |
+| `MAX_GAS_GWEI`         | Gas price ceiling in Gwei (default: `30`)                |
+| `RISK_SCORE_THRESHOLD` | Minimum risk score to proceed (0–100, default: `70`)     |
+| `DRY_RUN`              | Set `true` to simulate swaps without submitting on-chain |
 
 ### 3. Build
 
@@ -113,10 +113,10 @@ The server starts on port `3000` by default.
 
 #### Endpoints
 
-| Method | Path | Description |
-|---|---|---|
-| `GET` | `/health` | Liveness check |
-| `POST` | `/cycle` | Run one full agent cycle (blocking JSON response) |
+| Method | Path            | Description                                       |
+| ------ | --------------- | ------------------------------------------------- |
+| `GET`  | `/health`       | Liveness check                                    |
+| `POST` | `/cycle`        | Run one full agent cycle (blocking JSON response) |
 | `POST` | `/cycle/stream` | Run one full agent cycle with SSE event streaming |
 
 ### Single cycle (CLI)
@@ -170,7 +170,8 @@ pnpm --filter @swarm/compute dev
 MIT
 pnpm dlx turbo build
 pnpm exec turbo build
-```
+
+````
 
 You can build a specific package by using a [filter](https://turborepo.dev/docs/crafting-your-repository/running-tasks#using-filters):
 
@@ -178,7 +179,7 @@ With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#gl
 
 ```sh
 turbo build --filter=docs
-```
+````
 
 Without global `turbo`:
 

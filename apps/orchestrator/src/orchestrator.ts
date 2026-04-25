@@ -10,7 +10,8 @@ import { ExecutorAgent } from "@swarm/agent-executor";
 import { logger } from "@swarm/shared";
 import type { SwarmCycleState, SwarmEvent, MemoryEntry } from "@swarm/shared";
 
-const GOAL = "Identify and execute profitable, low-risk token swaps on Uniswap V3 (Ethereum mainnet). Prioritise capital preservation over profit.";
+const GOAL =
+  "Identify and execute profitable, low-risk token swaps on Uniswap V3 (Ethereum mainnet). Prioritise capital preservation over profit.";
 
 // ─── SwarmOrchestrator ────────────────────────────────────────────────────────
 //
@@ -63,11 +64,10 @@ export class SwarmOrchestrator {
 
   async init(): Promise<void> {
     // Initialise 0G Compute and 0G Storage in parallel
-    await Promise.all([
-      this.compute.init(),
-      this.zgStorage.init(),
-    ]);
-    logger.info("[Orchestrator] All agents ready — 0G Compute + 0G Storage connected");
+    await Promise.all([this.compute.init(), this.zgStorage.init()]);
+    logger.info(
+      "[Orchestrator] All agents ready — 0G Compute + 0G Storage connected",
+    );
   }
 
   // ── Single cycle (blocking) ─────────────────────────────────────────────────
@@ -75,7 +75,9 @@ export class SwarmOrchestrator {
   async runCycle(): Promise<SwarmCycleState> {
     const cycleId = uuidv4();
     const state: SwarmCycleState = { cycleId, startedAt: Date.now() };
-    logger.info(`\n${"=".repeat(60)}\n[Swarm] Cycle ${cycleId} starting\n${"=".repeat(60)}`);
+    logger.info(
+      `\n${"=".repeat(60)}\n[Swarm] Cycle ${cycleId} starting\n${"=".repeat(60)}`,
+    );
 
     // Clear in-process cache for this cycle (0G Storage entries are permanent)
     this.memory.clear();
@@ -151,7 +153,7 @@ export class SwarmOrchestrator {
   }
 
   private buildNonStreamingSteps(
-    _cycleId: string
+    _cycleId: string,
   ): Array<[string, () => Promise<void>]> {
     const state: SwarmCycleState = {
       cycleId: _cycleId,

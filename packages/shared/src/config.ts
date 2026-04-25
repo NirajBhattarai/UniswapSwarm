@@ -7,10 +7,7 @@ export const SwarmConfigSchema = z.object({
   ZG_PRIVATE_KEY: z.string().min(64),
 
   // Ethereum (for Uniswap)
-  ETH_RPC_URL: z
-    .string()
-    .url()
-    .default("https://eth.llamarpc.com"),
+  ETH_RPC_URL: z.string().url().default("https://eth.llamarpc.com"),
 
   // 0G Compute
   ZG_COMPUTE_RPC: z
@@ -19,10 +16,7 @@ export const SwarmConfigSchema = z.object({
     .default("https://indexer-storage-testnet-turbo.0g.ai"),
 
   // 0G Storage
-  ZG_STORAGE_RPC: z
-    .string()
-    .url()
-    .default("https://evmrpc-testnet.0g.ai"),
+  ZG_STORAGE_RPC: z.string().url().default("https://evmrpc-testnet.0g.ai"),
   ZG_INDEXER_RPC: z
     .string()
     .url()

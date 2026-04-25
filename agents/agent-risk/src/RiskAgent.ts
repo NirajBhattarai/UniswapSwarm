@@ -69,21 +69,19 @@ export class RiskAgent {
     return this.ethProvider;
   }
 
-  async run(
-    opts: InferOptions = {}
-  ): Promise<RiskAssessment[]> {
+  async run(opts: InferOptions = {}): Promise<RiskAssessment[]> {
     // ── Read plan + research from 0G-backed shared memory ──────────────────────
     const plan = this.memory.readValue<TradePlan>("planner/plan");
     const report = this.memory.readValue<ResearchReport>("researcher/report");
 
     if (!plan || !report) {
       throw new Error(
-        "[Risk] planner/plan and researcher/report must be written to shared memory first"
+        "[Risk] planner/plan and researcher/report must be written to shared memory first",
       );
     }
 
     logger.info(
-      `[Risk] Read plan + research from shared memory. Assessing ${report.candidates.length} candidates…`
+      `[Risk] Read plan + research from shared memory. Assessing ${report.candidates.length} candidates…`,
     );
 
     const assessments: RiskAssessment[] = [];
@@ -92,7 +90,7 @@ export class RiskAgent {
       const assessment = await this.assessOne(plan, candidate, opts);
       assessments.push(assessment);
       logger.info(
-        `[Risk] ${candidate.symbol}: score=${assessment.score} passed=${assessment.passed}`
+        `[Risk] ${candidate.symbol}: score=${assessment.score} passed=${assessment.passed}`,
       );
     }
 
@@ -100,11 +98,13 @@ export class RiskAgent {
       RiskAgent.MEMORY_KEY,
       this.id,
       this.role,
-      assessments
+      assessments,
     );
 
     const passed = assessments.filter((a) => a.passed).length;
-    logger.info(`[Risk] Done — ${passed}/${assessments.length} candidates passed`);
+    logger.info(
+      `[Risk] Done — ${passed}/${assessments.length} candidates passed`,
+    );
     return assessments;
   }
 
@@ -113,7 +113,7 @@ export class RiskAgent {
   private async assessOne(
     plan: TradePlan,
     candidate: TokenCandidate,
-    opts: InferOptions
+    opts: InferOptions,
   ): Promise<RiskAssessment> {
     const onChainFlags = await this.runOnChainChecks(candidate);
     const context = this.memory.contextFor(RiskAgent.MEMORY_KEY);
@@ -130,7 +130,7 @@ export class RiskAgent {
     const assessment = await this.compute.inferJSON<RiskAssessment>(
       SYSTEM_PROMPT,
       userPrompt,
-      { maxTokens: 1024, ...opts }
+      { maxTokens: 1024, ...opts },
     );
 
     // Merge on-chain flags (hard truths the LLM cannot override)
@@ -139,7 +139,7 @@ export class RiskAgent {
 
     // Hard rules
     const hasCritical = assessment.flags.some(
-      (f: RiskFlag) => f.severity === "critical"
+      (f: RiskFlag) => f.severity === "critical",
     );
     const cfg = getConfig();
     if (hasCritical || assessment.score < cfg.RISK_SCORE_THRESHOLD) {
@@ -151,15 +151,27 @@ export class RiskAgent {
 
   // ─── On-chain checks ─────────────────────────────────────────────────────────
 
-  private async runOnChainChecks(candidate: TokenCandidate): Promise<RiskFlag[]> {
+  private async runOnChainChecks(
+    candidate: TokenCandidate,
+  ): Promise<RiskFlag[]> {
     const flags: RiskFlag[] = [];
+
+    // Guard: address must be a valid 42-char hex — LLMs sometimes emit symbol names
+    if (!/^0x[0-9a-fA-F]{40}$/.test(candidate.address)) {
+      flags.push({
+        type: "unverified_contract",
+        severity: "critical",
+        detail: `Invalid token address "${candidate.address}" — expected 0x… hex address`,
+      });
+      return flags;
+    }
 
     try {
       const provider = this.getEthProvider();
       const contract = new ethers.Contract(
         candidate.address,
         ERC20_ABI,
-        provider
+        provider,
       );
 
       // Check contract code exists
@@ -198,7 +210,9 @@ export class RiskAgent {
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      logger.warn(`[Risk] On-chain checks failed for ${candidate.symbol}: ${msg}`);
+      logger.warn(
+        `[Risk] On-chain checks failed for ${candidate.symbol}: ${msg}`,
+      );
     }
 
     return flags;

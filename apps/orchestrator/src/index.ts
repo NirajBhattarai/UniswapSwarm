@@ -23,7 +23,7 @@ async function main(): Promise<void> {
   // If CYCLE_INTERVAL_MS > 0, run autonomous cycling
   if (cfg.CYCLE_INTERVAL_MS > 0) {
     logger.info(
-      `[Swarm] Autonomous mode — cycling every ${cfg.CYCLE_INTERVAL_MS / 1000}s`
+      `[Swarm] Autonomous mode — cycling every ${cfg.CYCLE_INTERVAL_MS / 1000}s`,
     );
     const loop = async (): Promise<void> => {
       if (!orchestrator.isRunning()) {
@@ -32,7 +32,9 @@ async function main(): Promise<void> {
           logger.error(`[Swarm] Cycle error: ${msg}`);
         });
       }
-      setTimeout(() => { void loop(); }, cfg.CYCLE_INTERVAL_MS);
+      setTimeout(() => {
+        void loop();
+      }, cfg.CYCLE_INTERVAL_MS);
     };
     void loop();
   }

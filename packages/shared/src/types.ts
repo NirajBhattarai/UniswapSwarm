@@ -1,10 +1,10 @@
 // ─── Agent output types ───────────────────────────────────────────────────────
 
 export interface TradeConstraints {
-  maxSlippagePct: number;     // e.g. 1.5
-  maxPositionUSDC: number;    // e.g. 100
-  minLiquidityUSD: number;    // e.g. 50_000
-  maxGasGwei: number;         // e.g. 30
+  maxSlippagePct: number; // e.g. 1.5
+  maxPositionUSDC: number; // e.g. 100
+  minLiquidityUSD: number; // e.g. 50_000
+  maxGasGwei: number; // e.g. 30
   allowUnverified: boolean;
 }
 
@@ -26,16 +26,16 @@ export interface TradePlan {
 // ─── Research types ────────────────────────────────────────────────────────────
 
 export interface TokenCandidate {
-  address: string;        // checksummed ERC-20 address
+  address: string; // checksummed ERC-20 address
   symbol: string;
   name: string;
-  pairAddress: string;    // Uniswap V3 pool address
-  baseToken: string;      // WETH | USDC | USDT
+  pairAddress: string; // Uniswap V3 pool address
+  baseToken: string; // WETH | USDC | USDT
   priceUSD: number;
   liquidityUSD: number;
   volume24hUSD: number;
   priceChange24hPct: number;
-  poolFeeTier: number;    // 500 | 3000 | 10000
+  poolFeeTier: number; // 500 | 3000 | 10000
   txCount: number;
 }
 
@@ -69,8 +69,8 @@ export interface RiskFlag {
 export interface RiskAssessment {
   tokenAddress: string;
   symbol: string;
-  score: number;         // 0-100 (higher = safer)
-  passed: boolean;       // true if score >= threshold and no critical flags
+  score: number; // 0-100 (higher = safer)
+  passed: boolean; // true if score >= threshold and no critical flags
   flags: RiskFlag[];
   recommendation: string;
   checkedAt: number;
@@ -97,7 +97,7 @@ export interface TradeStrategy {
 
 export interface Critique {
   approved: boolean;
-  confidence: number;   // 0-100
+  confidence: number; // 0-100
   issues: string[];
   suggestions: string[];
   summary: string;
@@ -106,7 +106,7 @@ export interface Critique {
 // ─── Execution types ───────────────────────────────────────────────────────────
 
 export interface ExecutionResult {
-  dryRun: boolean;        // true = simulated only
+  dryRun: boolean; // true = simulated only
   txHash: string | null;
   success: boolean;
   amountIn: string;
@@ -138,7 +138,7 @@ export interface MemoryEntry {
   agentId: string;
   role: string;
   value: unknown;
-  hash: string;          // 0G Storage hash (or local fallback)
+  hash: string; // 0G Storage hash (or local fallback)
   ts: number;
 }
 
@@ -148,7 +148,7 @@ export type SwarmEventType =
   | "cycle_start"
   | "agent_start"
   | "agent_done"
-  | "delta"               // LLM token stream
+  | "delta" // LLM token stream
   | "cycle_done"
   | "cycle_error";
 
@@ -156,7 +156,7 @@ export interface SwarmEvent {
   type: SwarmEventType;
   cycleId: string;
   agentId: string;
-  content?: string;       // delta text or JSON summary
-  data?: unknown;         // structured payload (for done events)
+  content?: string; // delta text or JSON summary
+  data?: unknown; // structured payload (for done events)
   ts: number;
 }
