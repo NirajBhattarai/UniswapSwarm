@@ -3,12 +3,23 @@ import { ZGCompute } from "@swarm/compute";
 import { BlackboardMemory, ZGStorage } from "@swarm/memory";
 import { PlannerAgent } from "@swarm/agent-planner";
 import { ResearchAgent } from "@swarm/agent-researcher";
+import type { PriceQuoteResponse } from "@swarm/agent-researcher";
 import { RiskAgent } from "@swarm/agent-risk";
 import { StrategyAgent } from "@swarm/agent-strategy";
 import { CriticAgent } from "@swarm/agent-critic";
 import { ExecutorAgent } from "@swarm/agent-executor";
 import { logger } from "@swarm/shared";
-import type { SwarmCycleState, SwarmEvent, MemoryEntry } from "@swarm/shared";
+import type {
+  SwarmCycleState,
+  SwarmEvent,
+  MemoryEntry,
+  ResearchReport,
+  TradePlan,
+  RiskAssessment,
+  TradeStrategy,
+  Critique,
+  ExecutionResult,
+} from "@swarm/shared";
 
 const GOAL =
   "Identify and execute profitable, low-risk token swaps on Uniswap V3 (Ethereum mainnet). Prioritise capital preservation over profit.";
@@ -202,6 +213,55 @@ export class SwarmOrchestrator {
         },
       ],
     ];
+  }
+
+  // ── Per-agent public runners ────────────────────────────────────────────────
+  // Each method runs a single agent in isolation. The agent reads whatever
+  // prior state is currently in shared memory and writes its output there.
+
+  async runResearcher(goal?: string): Promise<ResearchReport> {
+    return this.researcher.run(goal ?? GOAL);
+  }
+
+  async runPlanner(goal?: string): Promise<TradePlan> {
+    return this.planner.run(goal ?? GOAL);
+  }
+
+  async runRisk(): Promise<RiskAssessment[]> {
+    return this.risk.run();
+  }
+
+  async runStrategy(): Promise<TradeStrategy | null> {
+    return this.strategy.run();
+  }
+
+  async runCritic(): Promise<Critique> {
+    return this.critic.run();
+  }
+
+  async runExecutor(): Promise<ExecutionResult> {
+    return this.executor.run();
+  }
+
+  async fetchPrices(tokens: string[]): Promise<PriceQuoteResponse> {
+    return this.researcher.fetchTokenPrices(tokens);
+  }
+
+  // Generic SSE wrapper — yields agent_start, agent_done (with data), or cycle_error.
+  async *runAgentStream(
+    agentId: string,
+    runFn: () => Promise<unknown>,
+  ): AsyncGenerator<SwarmEvent> {
+    const cycleId = uuidv4();
+    const ts = () => Date.now();
+    yield { type: "agent_start", cycleId, agentId, ts: ts() };
+    try {
+      const data = await runFn();
+      yield { type: "agent_done", cycleId, agentId, data, ts: ts() };
+    } catch (err) {
+      const content = err instanceof Error ? err.message : String(err);
+      yield { type: "cycle_error", cycleId, agentId, content, ts: ts() };
+    }
   }
 
   // ── History ─────────────────────────────────────────────────────────────────

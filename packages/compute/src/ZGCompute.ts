@@ -58,13 +58,7 @@ export class ZGCompute {
     );
 
     // Ensure ledger funded
-    try {
-      await broker.ledger.getLedger();
-      logger.info("[Compute] Ledger funded ✓");
-    } catch {
-      logger.info("[Compute] Depositing 1 OG to ledger…");
-      await broker.ledger.depositFund(1);
-    }
+    await this.autoFundLedger();
 
     // Both acknowledgeProviderSigner and getServiceMetadata can hang — cap each at 8 s
     const withTimeout = <T>(
@@ -109,6 +103,73 @@ export class ZGCompute {
     );
   }
 
+  // ── Smart ledger top-up ──────────────────────────────────────────────────────
+
+  /**
+   * Checks wallet OG balance and ledger balance, then deposits enough to bring
+   * the ledger to TARGET_OG (default 5), keeping RESERVE_OG (default 1) in wallet.
+   * Safe to call at any time — no-ops if ledger already has enough.
+   */
+  private async autoFundLedger(targetOG = 5, reserveOG = 1): Promise<void> {
+    const broker = this.broker;
+    if (!broker) return;
+
+    // Current ledger balance
+    let ledgerBalance = 0;
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const ledger = await (broker.ledger.getLedger() as Promise<any>);
+      const raw: unknown =
+        ledger?.balance ??
+        ledger?.totalBalance ??
+        ledger?.availableBalance ??
+        ledger?.[0] ??
+        0;
+      ledgerBalance =
+        typeof raw === "bigint"
+          ? parseFloat(ethers.formatEther(raw))
+          : typeof raw === "string"
+            ? parseFloat(ethers.formatEther(BigInt(raw)))
+            : Number(raw);
+      logger.info(`[Compute] Ledger balance: ${ledgerBalance.toFixed(4)} OG`);
+    } catch {
+      logger.info("[Compute] No ledger yet — will create one");
+      ledgerBalance = 0;
+    }
+
+    if (ledgerBalance >= targetOG) {
+      logger.info(`[Compute] Ledger has ${ledgerBalance.toFixed(4)} OG ✓`);
+      return;
+    }
+
+    // Wallet balance
+    const walletWei = await this.provider.getBalance(this.wallet.address);
+    const walletBalance = parseFloat(ethers.formatEther(walletWei));
+    logger.info(`[Compute] Wallet balance: ${walletBalance.toFixed(4)} OG`);
+
+    if (walletBalance <= reserveOG) {
+      logger.warn(
+        `[Compute] Wallet balance (${walletBalance.toFixed(4)} OG) is at/below ` +
+          `the ${reserveOG} OG reserve — cannot auto-fund ledger.`,
+      );
+      return;
+    }
+
+    const shortfall = targetOG - ledgerBalance;
+    const maxCanDeposit = walletBalance - reserveOG;
+    const deposit = Math.min(shortfall, maxCanDeposit);
+    const rounded = Math.floor(deposit * 1e6) / 1e6;
+
+    logger.info(
+      `[Compute] Depositing ${rounded} OG into ledger ` +
+        `(target=${targetOG}, current=${ledgerBalance.toFixed(4)}, shortfall=${shortfall.toFixed(4)})…`,
+    );
+    await broker.ledger.depositFund(rounded);
+    logger.info(
+      `[Compute] Ledger topped up ✓ (~${(ledgerBalance + rounded).toFixed(4)} OG)`,
+    );
+  }
+
   // ── Non-streaming inference ─────────────────────────────────────────────────
 
   async infer(
@@ -119,9 +180,29 @@ export class ZGCompute {
     const svc = await this.requireInit();
     const broker =
       this.broker ?? (await createZGComputeNetworkBroker(this.wallet));
-    const headers = (await broker.inference.getRequestHeaders(
-      svc.providerAddress,
-    )) as unknown as Record<string, string>;
+
+    let headers: Record<string, string>;
+    try {
+      headers = (await broker.inference.getRequestHeaders(
+        svc.providerAddress,
+      )) as unknown as Record<string, string>;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (
+        msg.toLowerCase().includes("ledger") ||
+        msg.toLowerCase().includes("0g")
+      ) {
+        logger.warn(
+          `[Compute] Ledger error during infer — attempting auto-fund: ${msg}`,
+        );
+        await this.autoFundLedger();
+        headers = (await broker.inference.getRequestHeaders(
+          svc.providerAddress,
+        )) as unknown as Record<string, string>;
+      } else {
+        throw err;
+      }
+    }
 
     const body = JSON.stringify({
       model: svc.model,
@@ -163,9 +244,29 @@ export class ZGCompute {
     const svc = await this.requireInit();
     const broker =
       this.broker ?? (await createZGComputeNetworkBroker(this.wallet));
-    const headers = (await broker.inference.getRequestHeaders(
-      svc.providerAddress,
-    )) as unknown as Record<string, string>;
+
+    let headers: Record<string, string>;
+    try {
+      headers = (await broker.inference.getRequestHeaders(
+        svc.providerAddress,
+      )) as unknown as Record<string, string>;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (
+        msg.toLowerCase().includes("ledger") ||
+        msg.toLowerCase().includes("0g")
+      ) {
+        logger.warn(
+          `[Compute] Ledger error during inferStream — attempting auto-fund: ${msg}`,
+        );
+        await this.autoFundLedger();
+        headers = (await broker.inference.getRequestHeaders(
+          svc.providerAddress,
+        )) as unknown as Record<string, string>;
+      } else {
+        throw err;
+      }
+    }
 
     const body = JSON.stringify({
       model: svc.model,

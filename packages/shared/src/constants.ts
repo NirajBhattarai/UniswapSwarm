@@ -1,3 +1,7 @@
+// Uniswap Trading API (hosted, auth via x-api-key header)
+export const UNISWAP_TRADE_API_BASE_URL =
+  "https://trade-api.gateway.uniswap.org/v1";
+
 // Uniswap V3 Ethereum Mainnet addresses
 export const UNISWAP = {
   SWAP_ROUTER_02: "0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45",
