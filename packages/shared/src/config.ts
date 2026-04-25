@@ -1,22 +1,5 @@
 import { z } from "zod";
-import * as path from "path";
-import * as fs from "fs";
-import * as dotenv from "dotenv";
-
-// Walk up from cwd to find nearest .env (handles running from nested package dirs)
-function findEnv(): string {
-  let dir = process.cwd();
-  for (let i = 0; i < 6; i++) {
-    const candidate = path.join(dir, ".env");
-    if (fs.existsSync(candidate)) return candidate;
-    const parent = path.dirname(dir);
-    if (parent === dir) break; // reached filesystem root
-    dir = parent;
-  }
-  return path.join(process.cwd(), ".env"); // fallback
-}
-
-dotenv.config({ path: findEnv() });
+import "dotenv/config";
 
 export const SwarmConfigSchema = z.object({
   // 0G Network
