@@ -176,6 +176,28 @@ export function createServer(
     },
   );
 
+  // ── Researcher: market data (CoinGecko) ────────────────────────────────────
+  // POST /agents/researcher/market   body: { tokens: string[] }
+  app.post(
+    "/agents/researcher/market",
+    async (req: Request, res: Response): Promise<void> => {
+      const { tokens } = req.body as { tokens?: string[] };
+      if (!Array.isArray(tokens) || tokens.length === 0) {
+        res
+          .status(400)
+          .json({ error: "Body must contain a non-empty 'tokens' array" });
+        return;
+      }
+      try {
+        const data = await orchestrator.fetchMarketData(tokens);
+        res.json(data);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        res.status(500).json({ error: msg });
+      }
+    },
+  );
+
   // ── Planner ─────────────────────────────────────────────────────────────────
   // POST /agents/planner          body: { goal?: string }
   // POST /agents/planner/stream   body: { goal?: string }
@@ -286,6 +308,9 @@ export async function startServer(
     );
     logger.info(
       `[API]   POST /agents/researcher/prices   | /agents/researcher/prices/stream  body: { tokens[] }`,
+    );
+    logger.info(
+      `[API]   POST /agents/researcher/market                                        body: { tokens[] }`,
     );
     logger.info(
       `[API]   POST /agents/planner             | /agents/planner/stream`,

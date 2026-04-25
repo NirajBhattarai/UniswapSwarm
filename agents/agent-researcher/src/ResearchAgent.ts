@@ -5,6 +5,7 @@ import {
   getConfig,
   UNISWAP,
   UNISWAP_TRADE_API_BASE_URL,
+  COINGECKO_API_BASE_URL,
 } from "@swarm/shared";
 import type { ResearchReport, TokenCandidate } from "@swarm/shared";
 import { ethers } from "ethers";
@@ -333,6 +334,33 @@ const MOCK_POOLS: PoolSnapshot[] = [
   },
 ];
 
+// ─── CoinGecko ID map (symbol → CoinGecko coin id) ───────────────────────────
+
+const SYMBOL_TO_COINGECKO_ID: Record<string, string> = {
+  ETH: "ethereum",
+  WETH: "ethereum",
+  BTC: "bitcoin",
+  WBTC: "wrapped-bitcoin",
+  USDC: "usd-coin",
+  USDT: "tether",
+  DAI: "dai",
+  LINK: "chainlink",
+  UNI: "uniswap",
+  AAVE: "aave",
+  MKR: "maker",
+  CRV: "curve-dao-token",
+};
+
+// ─── CoinGecko market data interface ─────────────────────────────────────────
+
+export interface CoinGeckoMarketData {
+  symbol: string;
+  price_usd: number;
+  volume_24h_usd: number;
+  price_change_24h_pct: number;
+  market_cap_usd: number;
+}
+
 // ─── Price-fetching output contract ───────────────────────────────────────────
 
 export interface TokenPriceResult {
@@ -345,6 +373,12 @@ export interface TokenPriceResult {
   source: "uniswap";
   /** Pair route used: "TOKEN/USDC" | "TOKEN/WETH" | "NONE" */
   liquidity_used: string;
+  /** 24h trading volume in USD across all exchanges (CoinGecko) */
+  volume_24h_usd?: number | null;
+  /** 24h price change percentage (CoinGecko) */
+  price_change_24h_pct?: number | null;
+  /** Market capitalisation in USD (CoinGecko) */
+  market_cap_usd?: number | null;
 }
 
 export interface PriceQuoteResponse {
@@ -455,17 +489,30 @@ export class ResearchAgent {
   async run(goal: string, opts: InferOptions = {}): Promise<ResearchReport> {
     logger.info(`[Researcher] Fetching Uniswap V3 pool data (on-chain)…`);
 
-    const pools = await this.fetchOnChainPools();
+    const [pools, marketData] = await Promise.all([
+      this.fetchOnChainPools(),
+      this.fetchCoinGeckoMarketData(Object.keys(SYMBOL_TO_COINGECKO_ID)),
+    ]);
     logger.info(`[Researcher] Fetched ${pools.length} pools from chain`);
 
     const cfg = getConfig();
     const context = this.memory.contextFor(ResearchAgent.MEMORY_KEY);
 
+    // Build a compact market summary string from CoinGecko data (if available)
+    let marketDataText = "";
+    if (marketData.size > 0) {
+      const lines = Array.from(marketData.entries()).map(
+        ([sym, d]) =>
+          `${sym}: price=$${d.price_usd.toFixed(4)} vol24h=$${(d.volume_24h_usd / 1e6).toFixed(1)}M chg24h=${d.price_change_24h_pct.toFixed(2)}% mcap=$${(d.market_cap_usd / 1e9).toFixed(2)}B`,
+      );
+      marketDataText = `\nLive CoinGecko market data (24h):\n${lines.join("\n")}`;
+    }
+
     const userPrompt = [
       `Trading goal: ${goal}`,
-      // Hard-coded default constraints — Planner will refine these in its plan
       `Default constraints: maxSlippage=${cfg.MAX_SLIPPAGE_PCT}%, maxPosition=$${cfg.MAX_POSITION_USDC} USDC, minLiquidity=$${cfg.MIN_LIQUIDITY_USD.toLocaleString()}`,
       `Live Uniswap V3 on-chain pool snapshots:\n${JSON.stringify(pools, null, 2)}`,
+      marketDataText,
       context,
     ]
       .filter(Boolean)
@@ -480,13 +527,22 @@ export class ResearchAgent {
     report.timestamp = Date.now();
     report.dataSource = "uniswap-v3-onchain";
 
+    // Enrich candidates with CoinGecko volume + price change data
+    for (const candidate of report.candidates as TokenCandidate[]) {
+      const cg = marketData.get(candidate.symbol);
+      if (cg) {
+        if (!candidate.volume24hUSD || candidate.volume24hUSD === 0)
+          candidate.volume24hUSD = cg.volume_24h_usd;
+        if (!candidate.priceChange24hPct || candidate.priceChange24hPct === 0)
+          candidate.priceChange24hPct = cg.price_change_24h_pct;
+      }
+    }
+
     // Hard-coded liquidity floor — Planner's plan may tighten this further
     report.candidates = report.candidates.filter(
       (c: TokenCandidate) => c.liquidityUSD >= cfg.MIN_LIQUIDITY_USD,
     );
 
-    // ── Write to shared 0G-backed memory ──────────────────────────────────────
-    // All downstream agents (Planner, Risk, Strategy, Critic) will read this.
     await this.memory.write(
       ResearchAgent.MEMORY_KEY,
       this.id,
@@ -583,6 +639,88 @@ export class ResearchAgent {
     return snapshots;
   }
 
+  // ── Public: fetch market data (volume, price change, mcap) from CoinGecko ───
+  // Requires COINGECKO_API_KEY in env. Returns a map of symbol → market data.
+  // Gracefully returns empty map if key is absent or API fails.
+
+  async fetchCoinGeckoMarketData(
+    symbols: string[],
+  ): Promise<Map<string, CoinGeckoMarketData>> {
+    const { COINGECKO_API_KEY } = getConfig();
+    const result = new Map<string, CoinGeckoMarketData>();
+
+    if (!COINGECKO_API_KEY) {
+      logger.debug(
+        "[Researcher] No COINGECKO_API_KEY set — skipping market data",
+      );
+      return result;
+    }
+
+    // Map symbols to CoinGecko IDs (deduplicated)
+    const idToSymbols = new Map<string, string[]>();
+    for (const sym of symbols) {
+      const id = SYMBOL_TO_COINGECKO_ID[sym.toUpperCase()];
+      if (!id) continue;
+      const existing = idToSymbols.get(id) ?? [];
+      existing.push(sym.toUpperCase());
+      idToSymbols.set(id, existing);
+    }
+
+    if (idToSymbols.size === 0) return result;
+
+    const ids = Array.from(idToSymbols.keys()).join(",");
+    const url = `${COINGECKO_API_BASE_URL}/coins/markets?vs_currency=usd&ids=${ids}&order=market_cap_desc&per_page=50&page=1&price_change_percentage=24h&x_cg_demo_api_key=${COINGECKO_API_KEY}`;
+
+    try {
+      const res = await fetch(url, {
+        headers: { Accept: "application/json" },
+      });
+
+      if (!res.ok) {
+        logger.warn(
+          `[Researcher] CoinGecko API ${res.status}: ${await res.text()}`,
+        );
+        return result;
+      }
+
+      const coins = (await res.json()) as Array<{
+        id: string;
+        symbol: string;
+        current_price: number;
+        total_volume: number;
+        price_change_percentage_24h: number;
+        market_cap: number;
+      }>;
+
+      for (const coin of coins) {
+        const syms = idToSymbols.get(coin.id) ?? [];
+        const data: CoinGeckoMarketData = {
+          symbol: coin.symbol.toUpperCase(),
+          price_usd: coin.current_price,
+          volume_24h_usd: coin.total_volume,
+          price_change_24h_pct: coin.price_change_percentage_24h,
+          market_cap_usd: coin.market_cap,
+        };
+        for (const sym of syms) {
+          result.set(sym, data);
+        }
+        logger.debug(
+          `[Researcher] CoinGecko ${coin.symbol.toUpperCase()}: $${coin.current_price} vol=$${(coin.total_volume / 1e6).toFixed(1)}M`,
+        );
+      }
+
+      logger.info(
+        `[Researcher] CoinGecko market data fetched for ${result.size} tokens`,
+      );
+    } catch (err) {
+      logger.warn(
+        `[Researcher] CoinGecko fetch error: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+
+    return result;
+  }
+
   // ── Public: fetch real-time USD prices from Uniswap on-chain data ─────────────
   // Input:  { tokens: ["ETH", "USDC", "WBTC"] }  (symbols or addresses)
   // Output: { data: TokenPriceResult[] }
@@ -601,10 +739,27 @@ export class ResearchAgent {
       }
     }
 
-    // Fetch all in parallel (cache-aware)
-    const results = await Promise.all(
-      ordered.map((input) => this.resolveTokenPrice(input, provider)),
-    );
+    // Fetch prices + CoinGecko market data in parallel
+    const [results, marketData] = await Promise.all([
+      Promise.all(
+        ordered.map((input) => this.resolveTokenPrice(input, provider)),
+      ),
+      this.fetchCoinGeckoMarketData(ordered),
+    ]);
+
+    // Merge CoinGecko fields into each result
+    for (const r of results) {
+      const cg = marketData.get(r.symbol);
+      if (cg) {
+        r.volume_24h_usd = cg.volume_24h_usd;
+        r.price_change_24h_pct = cg.price_change_24h_pct;
+        r.market_cap_usd = cg.market_cap_usd;
+        // If Uniswap price failed, fall back to CoinGecko price
+        if (r.price_usd === null) {
+          r.price_usd = cg.price_usd;
+        }
+      }
+    }
 
     return { data: results };
   }

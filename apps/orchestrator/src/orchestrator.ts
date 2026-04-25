@@ -3,7 +3,10 @@ import { ZGCompute } from "@swarm/compute";
 import { BlackboardMemory, ZGStorage } from "@swarm/memory";
 import { PlannerAgent } from "@swarm/agent-planner";
 import { ResearchAgent } from "@swarm/agent-researcher";
-import type { PriceQuoteResponse } from "@swarm/agent-researcher";
+import type {
+  PriceQuoteResponse,
+  CoinGeckoMarketData,
+} from "@swarm/agent-researcher";
 import { RiskAgent } from "@swarm/agent-risk";
 import { StrategyAgent } from "@swarm/agent-strategy";
 import { CriticAgent } from "@swarm/agent-critic";
@@ -245,6 +248,13 @@ export class SwarmOrchestrator {
 
   async fetchPrices(tokens: string[]): Promise<PriceQuoteResponse> {
     return this.researcher.fetchTokenPrices(tokens);
+  }
+
+  async fetchMarketData(
+    tokens: string[],
+  ): Promise<Record<string, CoinGeckoMarketData>> {
+    const map = await this.researcher.fetchCoinGeckoMarketData(tokens);
+    return Object.fromEntries(map.entries());
   }
 
   // Generic SSE wrapper — yields agent_start, agent_done (with data), or cycle_error.

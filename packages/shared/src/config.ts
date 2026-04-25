@@ -28,6 +28,9 @@ export const SwarmConfigSchema = z.object({
   // Uniswap Trading API (https://developers.uniswap.org/dashboard)
   UNISWAP_API_KEY: z.string().default(""),
 
+  // CoinGecko API (https://www.coingecko.com/en/api — free demo key or pro key)
+  COINGECKO_API_KEY: z.string().default(""),
+
   // Trade constraints (can be overridden via env)
   MAX_SLIPPAGE_PCT: z.coerce.number().default(1.5),
   MAX_POSITION_USDC: z.coerce.number().default(50),
