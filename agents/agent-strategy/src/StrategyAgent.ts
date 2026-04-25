@@ -49,11 +49,19 @@ export class StrategyAgent {
   }
 
   async run(
-    plan: TradePlan,
-    report: ResearchReport,
-    assessments: RiskAssessment[],
     opts: InferOptions = {}
   ): Promise<TradeStrategy | null> {
+    // ── Read plan, research, and risk assessments from 0G-backed shared memory ───
+    const plan = this.memory.readValue<TradePlan>("planner/plan");
+    const report = this.memory.readValue<ResearchReport>("researcher/report");
+    const assessments = this.memory.readValue<RiskAssessment[]>("risk/assessments");
+
+    if (!plan || !report || !assessments) {
+      throw new Error(
+        "[Strategy] planner/plan, researcher/report, and risk/assessments must be in shared memory first"
+      );
+    }
+
     const passed = assessments.filter((a) => a.passed);
 
     if (passed.length === 0) {
@@ -67,9 +75,9 @@ export class StrategyAgent {
       return null;
     }
 
-    logger.info(`[Strategy] Building trade from ${passed.length} passed candidates`);
+    logger.info(`[Strategy] Read all prior agent outputs from shared memory. Building trade from ${passed.length} passed candidates`);
 
-    // Only pass research for candidates that cleared risk
+    // Only use research for candidates that cleared risk
     const passedAddresses = new Set(passed.map((a) => a.tokenAddress));
     const safeCandidates = report.candidates.filter((c: TokenCandidate) =>
       passedAddresses.has(c.address)

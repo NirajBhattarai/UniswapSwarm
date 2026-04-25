@@ -7,10 +7,14 @@ import { getConfig } from "@swarm/shared";
 const SYSTEM_PROMPT = `You are the Planner agent in a Uniswap trading swarm.
 Your job is to create a structured, actionable trading plan for the cycle.
 
+IMPORTANT: The Researcher agent has already run and saved on-chain market data
+to shared memory. You will receive it below. Use it to tailor the plan
+to current market conditions — e.g. choose strategy type based on real pool data.
+
 Rules:
 - Always define a clear strategy type from: arbitrage, momentum, lp_rotation
 - Set concrete, conservative constraints — protect capital above all else
-- Assign specific tasks to: researcher, risk, strategy, critic, executor agents
+- Assign specific tasks to: risk, strategy, critic, executor agents
 - Output ONLY valid JSON matching exactly the schema below — no commentary
 
 Schema:
@@ -25,13 +29,12 @@ Schema:
     "allowUnverified": false
   },
   "tasks": [
-    { "agentId": "researcher", "action": "<what to research>" },
-    { "agentId": "risk",       "action": "<what to validate>" },
-    { "agentId": "strategy",   "action": "<what strategy to build>" },
-    { "agentId": "critic",     "action": "<what to critique>" },
-    { "agentId": "executor",   "action": "<what to execute>" }
+    { "agentId": "risk",     "action": "<what to validate>" },
+    { "agentId": "strategy", "action": "<what strategy to build>" },
+    { "agentId": "critic",   "action": "<what to critique>" },
+    { "agentId": "executor", "action": "<what to execute>" }
   ],
-  "rationale": "<short explanation of strategy choice>"
+  "rationale": "<short explanation of strategy choice based on the research data>"
 }`;
 
 export class PlannerAgent {
@@ -47,8 +50,13 @@ export class PlannerAgent {
     this.memory = memory;
   }
 
+  /**
+   * Planner runs SECOND — after Researcher has written market data to shared memory.
+   * contextFor() pulls the researcher/report from 0G-backed memory and injects it
+   * into the LLM prompt so the plan is grounded in real on-chain data.
+   */
   async run(goal: string, opts: InferOptions = {}): Promise<TradePlan> {
-    logger.info(`[Planner] Planning cycle — goal="${goal}"`);
+    logger.info(`[Planner] Reading research from shared memory and planning…`);
 
     const cfg = getConfig();
     const defaultConstraints: TradeConstraints = {
@@ -59,12 +67,13 @@ export class PlannerAgent {
       allowUnverified: false,
     };
 
+    // Reads researcher/report from shared 0G-backed memory
     const context = this.memory.contextFor(PlannerAgent.MEMORY_KEY);
 
     const userPrompt = [
       `Goal: ${goal}`,
       `Default constraints: ${JSON.stringify(defaultConstraints)}`,
-      context,
+      context, // <─ contains Researcher’s report from 0G memory
     ]
       .filter(Boolean)
       .join("\n\n");
@@ -75,7 +84,7 @@ export class PlannerAgent {
       { maxTokens: 1024, ...opts }
     );
 
-    // Merge in hardcoded safety defaults — LLM cannot relax them
+    // Hard safety caps — LLM cannot relax these
     plan.constraints.allowUnverified = false;
     plan.constraints.maxSlippagePct = Math.min(
       plan.constraints.maxSlippagePct,
@@ -84,8 +93,10 @@ export class PlannerAgent {
 
     plan.createdAt = Date.now();
 
+    // ── Write plan to shared 0G-backed memory ────────────────────────────────
+    // Risk, Strategy, Critic, Executor all read this via memory.readValue()
     await this.memory.write(PlannerAgent.MEMORY_KEY, this.id, this.role, plan);
-    logger.info(`[Planner] Plan created — strategy=${plan.strategy}`);
+    logger.info(`[Planner] Plan saved to shared memory — strategy=${plan.strategy}`);
     return plan;
   }
 }

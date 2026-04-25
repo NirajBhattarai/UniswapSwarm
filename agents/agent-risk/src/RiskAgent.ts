@@ -70,12 +70,20 @@ export class RiskAgent {
   }
 
   async run(
-    plan: TradePlan,
-    report: ResearchReport,
     opts: InferOptions = {}
   ): Promise<RiskAssessment[]> {
+    // ── Read plan + research from 0G-backed shared memory ──────────────────────
+    const plan = this.memory.readValue<TradePlan>("planner/plan");
+    const report = this.memory.readValue<ResearchReport>("researcher/report");
+
+    if (!plan || !report) {
+      throw new Error(
+        "[Risk] planner/plan and researcher/report must be written to shared memory first"
+      );
+    }
+
     logger.info(
-      `[Risk] Assessing ${report.candidates.length} candidates…`
+      `[Risk] Read plan + research from shared memory. Assessing ${report.candidates.length} candidates…`
     );
 
     const assessments: RiskAssessment[] = [];

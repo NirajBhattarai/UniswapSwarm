@@ -1,6 +1,6 @@
 import { v4 as uuidv4 } from "uuid";
 import { ZGCompute } from "@swarm/compute";
-import { BlackboardMemory } from "@swarm/memory";
+import { BlackboardMemory, ZGStorage } from "@swarm/memory";
 import { PlannerAgent } from "@swarm/agent-planner";
 import { ResearchAgent } from "@swarm/agent-researcher";
 import { RiskAgent } from "@swarm/agent-risk";
@@ -8,23 +8,30 @@ import { StrategyAgent } from "@swarm/agent-strategy";
 import { CriticAgent } from "@swarm/agent-critic";
 import { ExecutorAgent } from "@swarm/agent-executor";
 import { logger } from "@swarm/shared";
-import type { SwarmCycleState, SwarmEvent } from "@swarm/shared";
+import type { SwarmCycleState, SwarmEvent, MemoryEntry } from "@swarm/shared";
 
 const GOAL = "Identify and execute profitable, low-risk token swaps on Uniswap V3 (Ethereum mainnet). Prioritise capital preservation over profit.";
 
 // ─── SwarmOrchestrator ────────────────────────────────────────────────────────
 //
-// Coordinates the full agent pipeline per cycle:
-//   Planner → Researcher → Risk → Strategy → Critic → Executor
+// Agent pipeline order (each agent writes to shared 0G-backed memory,
+// and every subsequent agent reads prior outputs from that same memory):
 //
-// Agents share a single BlackboardMemory instance so every agent can read
-// all previous agents' structured outputs before acting.
+//   1. Researcher  — fetches live on-chain pool data, saves researcher/report
+//   2. Planner     — reads researcher/report, creates plan, saves planner/plan
+//   3. Risk        — reads planner/plan + researcher/report, saves risk/assessments
+//   4. Strategy    — reads all above, builds trade proposal, saves strategy/proposal
+//   5. Critic      — reads all above, approves/rejects, saves critic/critique
+//   6. Executor    — reads strategy/proposal + critic/critique, executes (or simulates)
+// ─────────────────────────────────────────────────────────────────────────────
 // ─────────────────────────────────────────────────────────────────────────────
 
 export class SwarmOrchestrator {
   private readonly compute: ZGCompute;
+  private readonly zgStorage: ZGStorage;
 
-  // Planner + researcher + risk share the same compute client
+  // Agents are re-created each cycle with a fresh BlackboardMemory backed
+  // by the shared ZGStorage instance so writes persist to 0G network.
   private readonly planner: PlannerAgent;
   private readonly researcher: ResearchAgent;
   private readonly risk: RiskAgent;
@@ -32,24 +39,35 @@ export class SwarmOrchestrator {
   private readonly critic: CriticAgent;
   private readonly executor: ExecutorAgent;
 
+  // Shared blackboard — cleared at the start of each cycle, 0G-backed
+  private readonly memory: BlackboardMemory;
+
   private cycleHistory: SwarmCycleState[] = [];
   private running = false;
 
   constructor() {
     this.compute = new ZGCompute();
-    const memory = new BlackboardMemory(); // shared per-cycle — cleared each cycle
+    this.zgStorage = new ZGStorage();
 
-    this.planner = new PlannerAgent(this.compute, memory);
-    this.researcher = new ResearchAgent(this.compute, memory);
-    this.risk = new RiskAgent(this.compute, memory);
-    this.strategy = new StrategyAgent(this.compute, memory);
-    this.critic = new CriticAgent(this.compute, memory);
-    this.executor = new ExecutorAgent(memory);
+    // Pass ZGStorage to BlackboardMemory so every agent write is persisted
+    // to the 0G Storage network as an on-chain audit trail.
+    this.memory = new BlackboardMemory(this.zgStorage);
+
+    this.planner = new PlannerAgent(this.compute, this.memory);
+    this.researcher = new ResearchAgent(this.compute, this.memory);
+    this.risk = new RiskAgent(this.compute, this.memory);
+    this.strategy = new StrategyAgent(this.compute, this.memory);
+    this.critic = new CriticAgent(this.compute, this.memory);
+    this.executor = new ExecutorAgent(this.memory);
   }
 
   async init(): Promise<void> {
-    await this.compute.init();
-    logger.info("[Orchestrator] All agents ready");
+    // Initialise 0G Compute and 0G Storage in parallel
+    await Promise.all([
+      this.compute.init(),
+      this.zgStorage.init(),
+    ]);
+    logger.info("[Orchestrator] All agents ready — 0G Compute + 0G Storage connected");
   }
 
   // ── Single cycle (blocking) ─────────────────────────────────────────────────
@@ -59,25 +77,29 @@ export class SwarmOrchestrator {
     const state: SwarmCycleState = { cycleId, startedAt: Date.now() };
     logger.info(`\n${"=".repeat(60)}\n[Swarm] Cycle ${cycleId} starting\n${"=".repeat(60)}`);
 
-    try {
-      state.plan = await this.planner.run(GOAL);
-      state.research = await this.researcher.run(state.plan);
-      state.riskAssessments = await this.risk.run(state.plan, state.research);
-      const stratResult = await this.strategy.run(
-        state.plan,
-        state.research,
-        state.riskAssessments
-      );
-      if (stratResult) state.strategy = stratResult;
-      state.critique = await this.critic.run(
-        state.plan,
-        state.research,
-        state.riskAssessments,
-        state.strategy ?? null
-      );
+    // Clear in-process cache for this cycle (0G Storage entries are permanent)
+    this.memory.clear();
 
+    try {
+      // 1. Researcher runs first — fetches live on-chain data, writes researcher/report
+      state.research = await this.researcher.run(GOAL);
+
+      // 2. Planner reads researcher/report from memory, creates plan, writes planner/plan
+      state.plan = await this.planner.run(GOAL);
+
+      // 3. Risk reads planner/plan + researcher/report from memory, writes risk/assessments
+      state.riskAssessments = await this.risk.run();
+
+      // 4. Strategy reads plan + research + risk from memory, writes strategy/proposal
+      const stratResult = await this.strategy.run();
+      if (stratResult) state.strategy = stratResult;
+
+      // 5. Critic reads all above from memory, writes critic/critique
+      state.critique = await this.critic.run();
+
+      // 6. Executor reads strategy/proposal + critic/critique from memory
       if (state.strategy) {
-        state.execution = await this.executor.run(state.strategy, state.critique);
+        state.execution = await this.executor.run();
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -139,54 +161,41 @@ export class SwarmOrchestrator {
 
     return [
       [
+        "researcher",
+        async () => {
+          state.research = await this.researcher.run(GOAL);
+        },
+      ],
+      [
         "planner",
         async () => {
           state.plan = await this.planner.run(GOAL);
         },
       ],
       [
-        "researcher",
-        async () => {
-          if (!state.plan) return;
-          state.research = await this.researcher.run(state.plan);
-        },
-      ],
-      [
         "risk",
         async () => {
-          if (!state.plan || !state.research) return;
-          state.riskAssessments = await this.risk.run(state.plan, state.research);
+          state.riskAssessments = await this.risk.run();
         },
       ],
       [
         "strategy",
         async () => {
-          if (!state.plan || !state.research || !state.riskAssessments) return;
-          const s = await this.strategy.run(
-            state.plan,
-            state.research,
-            state.riskAssessments
-          );
+          const s = await this.strategy.run();
           if (s) state.strategy = s;
         },
       ],
       [
         "critic",
         async () => {
-          if (!state.plan || !state.research || !state.riskAssessments) return;
-          state.critique = await this.critic.run(
-            state.plan,
-            state.research,
-            state.riskAssessments,
-            state.strategy ?? null
-          );
+          state.critique = await this.critic.run();
         },
       ],
       [
         "executor",
         async () => {
           if (!state.strategy || !state.critique) return;
-          state.execution = await this.executor.run(state.strategy, state.critique);
+          state.execution = await this.executor.run();
           state.completedAt = Date.now();
         },
       ],
@@ -194,6 +203,10 @@ export class SwarmOrchestrator {
   }
 
   // ── History ─────────────────────────────────────────────────────────────────
+
+  getMemory(): MemoryEntry[] {
+    return this.memory.readAll();
+  }
 
   getHistory(): SwarmCycleState[] {
     return this.cycleHistory;

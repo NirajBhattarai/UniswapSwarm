@@ -58,6 +58,11 @@ export function createServer(orchestrator: SwarmOrchestrator): express.Applicati
     }
   });
 
+  // ── Blackboard memory dump (after a cycle) ─────────────────────────────────────
+  app.get("/memory", (_req: Request, res: Response): void => {
+    res.json(orchestrator.getMemory());
+  });
+
   // ── Cycle history ─────────────────────────────────────────────────────────────
   app.get("/history", (_req: Request, res: Response): void => {
     res.json(orchestrator.getHistory());

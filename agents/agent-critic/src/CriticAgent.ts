@@ -50,13 +50,21 @@ export class CriticAgent {
   }
 
   async run(
-    plan: TradePlan,
-    report: ResearchReport,
-    assessments: RiskAssessment[],
-    strategy: TradeStrategy | null,
     opts: InferOptions = {}
   ): Promise<Critique> {
-    logger.info("[Critic] Reviewing plan, research, risk, and strategy…");
+    logger.info("[Critic] Reading all agent outputs from shared memory…");
+
+    // ── Read every prior agent’s output from 0G-backed shared memory ─────────
+    const plan = this.memory.readValue<TradePlan>("planner/plan");
+    const report = this.memory.readValue<ResearchReport>("researcher/report");
+    const assessments = this.memory.readValue<RiskAssessment[]>("risk/assessments");
+    const strategy = this.memory.readValue<TradeStrategy>("strategy/proposal") ?? null;
+
+    if (!plan || !report || !assessments) {
+      throw new Error(
+        "[Critic] planner/plan, researcher/report, and risk/assessments must be in shared memory first"
+      );
+    }
 
     if (strategy === null) {
       const rejection: Critique = {

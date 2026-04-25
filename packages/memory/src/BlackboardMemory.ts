@@ -1,26 +1,23 @@
 import * as crypto from "crypto";
 import { logger } from "@swarm/shared";
 import type { MemoryEntry } from "@swarm/shared";
+import type { ZGStorage } from "./ZGStorage";
 
 // ─── BlackboardMemory ─────────────────────────────────────────────────────────
 //
 // In-process key/value store for agent-to-agent communication within a cycle.
-// Backed by a 0G Storage write (best-effort) for on-chain audit trail.
-// All agents share ONE blackboard instance per orchestrator cycle.
+// Backed by 0G Storage writes (best-effort) for on-chain audit trail.
+// All agents share ONE BlackboardMemory instance per orchestrator cycle.
 //
-// Keys use the format:  "<cycleId>/<agentId>/<slot>"
-// e.g.  "c1/planner/plan", "c1/researcher/report", "c1/risk/assessment"
+// Keys use the format:  "<agentId>/<slot>"
+// e.g.  "planner/plan", "researcher/report", "risk/assessment"
 // ─────────────────────────────────────────────────────────────────────────────
-
-type StorageBackend = {
-  store(id: string, tag: string, data: unknown): Promise<string>;
-};
 
 export class BlackboardMemory {
   private readonly cache = new Map<string, MemoryEntry>();
-  private readonly storage: StorageBackend | null;
+  private readonly storage: ZGStorage | null;
 
-  constructor(storage?: StorageBackend) {
+  constructor(storage?: ZGStorage) {
     this.storage = storage ?? null;
   }
 
@@ -63,6 +60,16 @@ export class BlackboardMemory {
 
   read(key: string): MemoryEntry | undefined {
     return this.cache.get(key);
+  }
+
+  /**
+   * Typed read — returns the stored value cast to T, or undefined if not yet written.
+   * Agents use this to pull prior agent outputs directly from 0G-backed memory.
+   */
+  readValue<T>(key: string): T | undefined {
+    const entry = this.cache.get(key);
+    if (!entry) return undefined;
+    return entry.value as T;
   }
 
   readAll(): MemoryEntry[] {

@@ -8,8 +8,11 @@ import type {
 } from "@swarm/shared";
 
 // ─── Safety guard ─────────────────────────────────────────────────────────────
-// Set to false ONLY when real on-chain execution is explicitly desired.
-// This overrides DRY_RUN — even DRY_RUN=false will NOT submit transactions.
+// TODO: Set SIMULATION_ONLY = false and DRY_RUN=false in .env to enable real trades.
+// TODO: Fund the wallet (ZG_PRIVATE_KEY) with ETH + input token before live execution.
+// TODO: Set ETH_RPC_URL to a private RPC (Alchemy/Infura) for reliable mainnet access.
+// TODO: Decode Transfer event logs in executeTrade() to capture real amountOut.
+// Currently hard-coded to true — no real transactions will be submitted regardless of DRY_RUN.
 const SIMULATION_ONLY = true;
 
 // ─── Uniswap V3 SwapRouter02 ABI (minimal) ────────────────────────────────────
@@ -56,10 +59,17 @@ export class ExecutorAgent {
     return this.wallet;
   }
 
-  async run(
-    strategy: TradeStrategy,
-    critique: Critique
-  ): Promise<ExecutionResult> {
+  async run(): Promise<ExecutionResult> {
+    // ── Read strategy + critique from 0G-backed shared memory ────────────────────
+    const strategy = this.memory.readValue<TradeStrategy>("strategy/proposal");
+    const critique = this.memory.readValue<Critique>("critic/critique");
+
+    if (!strategy || !critique) {
+      throw new Error(
+        "[Executor] strategy/proposal and critic/critique must be in shared memory first"
+      );
+    }
+
     if (!critique.approved) {
       logger.warn(
         `[Executor] Critic rejected trade — skipping execution. Issues: ${critique.issues.join("; ")}`

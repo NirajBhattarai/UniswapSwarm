@@ -1,7 +1,7 @@
 import { ZGCompute, type InferOptions } from "@swarm/compute";
 import { BlackboardMemory } from "@swarm/memory";
 import { logger, getConfig } from "@swarm/shared";
-import type { ResearchReport, TokenCandidate, TradePlan } from "@swarm/shared";
+import type { ResearchReport, TokenCandidate } from "@swarm/shared";
 import { ethers } from "ethers";
 
 // ─── Minimal Uniswap V3 Pool ABI ──────────────────────────────────────────────
@@ -158,16 +158,24 @@ export class ResearchAgent {
     this.memory = memory;
   }
 
-  async run(plan: TradePlan, opts: InferOptions = {}): Promise<ResearchReport> {
+  /**
+   * Researcher runs FIRST in the pipeline — before the Planner.
+   * It fetches live on-chain data and writes the report to shared 0G memory.
+   * The Planner then reads this report via contextFor() and uses it to plan.
+   */
+  async run(goal: string, opts: InferOptions = {}): Promise<ResearchReport> {
     logger.info(`[Researcher] Fetching Uniswap V3 pool data (on-chain)…`);
 
     const pools = await this.fetchOnChainPools();
     logger.info(`[Researcher] Fetched ${pools.length} pools from chain`);
 
+    const cfg = getConfig();
     const context = this.memory.contextFor(ResearchAgent.MEMORY_KEY);
 
     const userPrompt = [
-      `Trading plan:\n${JSON.stringify(plan, null, 2)}`,
+      `Trading goal: ${goal}`,
+      // Hard-coded default constraints — Planner will refine these in its plan
+      `Default constraints: maxSlippage=${cfg.MAX_SLIPPAGE_PCT}%, maxPosition=$${cfg.MAX_POSITION_USDC} USDC, minLiquidity=$${cfg.MIN_LIQUIDITY_USD.toLocaleString()}`,
       `Live Uniswap V3 on-chain pool snapshots:\n${JSON.stringify(pools, null, 2)}`,
       context,
     ]
@@ -183,11 +191,13 @@ export class ResearchAgent {
     report.timestamp = Date.now();
     report.dataSource = "uniswap-v3-onchain";
 
-    // Enforce liquidity constraint hard — LLM cannot bypass
+    // Hard-coded liquidity floor — Planner's plan may tighten this further
     report.candidates = report.candidates.filter(
-      (c: TokenCandidate) => c.liquidityUSD >= plan.constraints.minLiquidityUSD
+      (c: TokenCandidate) => c.liquidityUSD >= cfg.MIN_LIQUIDITY_USD
     );
 
+    // ── Write to shared 0G-backed memory ──────────────────────────────────────
+    // All downstream agents (Planner, Risk, Strategy, Critic) will read this.
     await this.memory.write(
       ResearchAgent.MEMORY_KEY,
       this.id,
@@ -195,7 +205,7 @@ export class ResearchAgent {
       report
     );
     logger.info(
-      `[Researcher] Done — ${report.candidates.length} candidates found`
+      `[Researcher] Saved ${report.candidates.length} candidates to shared memory`
     );
     return report;
   }
@@ -218,9 +228,11 @@ export class ResearchAgent {
         try {
           const contract = new ethers.Contract(def.address, POOL_ABI, provider);
 
+          // llamarpc rejects eth_call with "latest" tag — use "finalized" instead.
+          const blockTag = "finalized";
           const [slot0Result, liquidityResult] = await Promise.all([
-            contract.getFunction("slot0")() as Promise<[bigint, bigint, ...unknown[]]>,
-            contract.getFunction("liquidity")() as Promise<bigint>,
+            contract.getFunction("slot0")({ blockTag }) as Promise<[bigint, bigint, ...unknown[]]>,
+            contract.getFunction("liquidity")({ blockTag }) as Promise<bigint>,
           ]);
 
           const sqrtPriceX96 = slot0Result[0];

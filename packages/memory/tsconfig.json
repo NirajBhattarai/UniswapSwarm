@@ -2,7 +2,9 @@
   "extends": "@repo/typescript-config/node.json",
   "compilerOptions": {
     "outDir": "./dist",
-    "rootDir": "./src"
+    "rootDir": "./src",
+    "moduleResolution": "NodeNext",
+    "module": "NodeNext"
   },
   "include": ["src"],
   "exclude": ["node_modules", "dist"]
