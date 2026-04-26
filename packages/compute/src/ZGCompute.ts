@@ -160,6 +160,11 @@ export class ZGCompute {
     const deposit = Math.min(shortfall, maxCanDeposit);
     const rounded = Math.floor(deposit * 1e6) / 1e6;
 
+    if (rounded <= 0) {
+      logger.info(`[Compute] Ledger topped up ✓ (~${ledgerBalance.toFixed(4)} OG)`);
+      return;
+    }
+
     logger.info(
       `[Compute] Depositing ${rounded} OG into ledger ` +
         `(target=${targetOG}, current=${ledgerBalance.toFixed(4)}, shortfall=${shortfall.toFixed(4)})…`,

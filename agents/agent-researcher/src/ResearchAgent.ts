@@ -94,245 +94,85 @@ const WETH_DEF: TokenDef = {
 const FEE_TIERS = [500, 3000, 10_000] as const;
 const MIN_POOL_LIQUIDITY_USD = 10_000; // skip pools with less than $10k virtual liquidity
 
-// ─── Known Uniswap V3 pools (Ethereum mainnet, by TVL) ────────────────────────
+// ─── Uniswap Trading API response types ──────────────────────────────────────
 
-interface PoolDef {
+interface UniswapAPIRoutePool {
+  type: string;
   address: string;
-  token0: { symbol: string; name: string; address: string; decimals: number };
-  token1: { symbol: string; name: string; address: string; decimals: number };
-  feeTier: number;
-  /** When true, report price as 1/raw (e.g. WETH price in USDC for a USDC/WETH pool) */
-  invertPrice: boolean;
-  priceLabel: string; // human-readable e.g. "WETH in USDC"
+  tokenIn: { address: string; chainId: number; decimals: string; symbol: string };
+  tokenOut: { address: string; chainId: number; decimals: string; symbol: string };
+  fee: string;
+  sqrtRatioX96: string;
+  liquidity: string;
+  tick: number;
+  amountIn?: string;
+  amountOut?: string;
 }
 
-const KNOWN_POOLS: PoolDef[] = [
+interface UniswapAPIQuoteResponse {
+  routing?: string;
+  quote?: {
+    chainId: number;
+    input: { token: { address: string; decimals: number; symbol: string }; amount: string };
+    output: { token: { address: string; decimals: number; symbol: string }; amount: string };
+    route: UniswapAPIRoutePool[][];
+  };
+  errorCode?: string;
+  detail?: string;
+}
+
+// ─── Token pairs to quote via Uniswap Trading API ────────────────────────────
+
+interface QueryPair {
+  tokenIn: { address: string; symbol: string; name: string; decimals: number };
+  tokenOut: { address: string; symbol: string; name: string; decimals: number };
+  /** Amount of tokenIn in smallest units (wei) */
+  amountIn: string;
+  priceLabel: string;
+}
+
+/** Placeholder EOA used as swapper for quote-only calls — not executing any swap */
+const QUOTE_SWAPPER_ADDRESS = "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045";
+
+const QUERY_PAIRS: QueryPair[] = [
   {
-    address: "0x88e6A0c2dDD26FEEb64F039a2c41296FcB3f5640",
-    token0: {
-      symbol: "USDC",
-      name: "USD Coin",
-      address: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
-      decimals: 6,
-    },
-    token1: {
-      symbol: "WETH",
-      name: "Wrapped Ether",
-      address: "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
-      decimals: 18,
-    },
-    feeTier: 500,
-    invertPrice: true,
-    priceLabel: "WETH in USDC",
+    tokenIn:  { address: "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2", symbol: "WETH",  name: "Wrapped Ether",   decimals: 18 },
+    tokenOut: { address: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", symbol: "USDC",  name: "USD Coin",        decimals: 6  },
+    amountIn: "1000000000000000000", // 1 WETH
+    priceLabel: "USDC per WETH",
   },
   {
-    address: "0x8ad599c3A0ff1De082011EFDDc58f1908eb6e6D8",
-    token0: {
-      symbol: "USDC",
-      name: "USD Coin",
-      address: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
-      decimals: 6,
-    },
-    token1: {
-      symbol: "WETH",
-      name: "Wrapped Ether",
-      address: "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
-      decimals: 18,
-    },
-    feeTier: 3000,
-    invertPrice: true,
-    priceLabel: "WETH in USDC",
-  },
-  {
-    address: "0x4e68Ccd3E89f51C3074ca5072bbAC773960dFa36",
-    token0: {
-      symbol: "WETH",
-      name: "Wrapped Ether",
-      address: "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
-      decimals: 18,
-    },
-    token1: {
-      symbol: "USDT",
-      name: "Tether USD",
-      address: "0xdAC17F958D2ee523a2206206994597C13D831ec7",
-      decimals: 6,
-    },
-    feeTier: 500,
-    invertPrice: false,
+    tokenIn:  { address: "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2", symbol: "WETH",  name: "Wrapped Ether",   decimals: 18 },
+    tokenOut: { address: "0xdAC17F958D2ee523a2206206994597C13D831ec7", symbol: "USDT",  name: "Tether USD",       decimals: 6  },
+    amountIn: "1000000000000000000", // 1 WETH
     priceLabel: "USDT per WETH",
   },
   {
-    address: "0x3416cF6C708Da44DB2624D63ea0AAef7113527C6",
-    token0: {
-      symbol: "USDC",
-      name: "USD Coin",
-      address: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
-      decimals: 6,
-    },
-    token1: {
-      symbol: "USDT",
-      name: "Tether USD",
-      address: "0xdAC17F958D2ee523a2206206994597C13D831ec7",
-      decimals: 6,
-    },
-    feeTier: 100,
-    invertPrice: false,
-    priceLabel: "USDT per USDC",
-  },
-  {
-    address: "0xCBCdF9626bC03E24f779434178A73a0B4bad62eD",
-    token0: {
-      symbol: "WBTC",
-      name: "Wrapped Bitcoin",
-      address: "0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599",
-      decimals: 8,
-    },
-    token1: {
-      symbol: "WETH",
-      name: "Wrapped Ether",
-      address: "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
-      decimals: 18,
-    },
-    feeTier: 3000,
-    invertPrice: false,
+    tokenIn:  { address: "0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599", symbol: "WBTC",  name: "Wrapped Bitcoin",  decimals: 8  },
+    tokenOut: { address: "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2", symbol: "WETH",  name: "Wrapped Ether",   decimals: 18 },
+    amountIn: "10000000", // 0.1 WBTC
     priceLabel: "WETH per WBTC",
   },
   {
-    address: "0x4585FE77225b41b697C938B018E2Ac67Ac5a20c0",
-    token0: {
-      symbol: "WBTC",
-      name: "Wrapped Bitcoin",
-      address: "0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599",
-      decimals: 8,
-    },
-    token1: {
-      symbol: "WETH",
-      name: "Wrapped Ether",
-      address: "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
-      decimals: 18,
-    },
-    feeTier: 500,
-    invertPrice: false,
-    priceLabel: "WETH per WBTC",
-  },
-  {
-    address: "0x5777d92f208679DB4b9778590Fa3CAB3aC9e2168",
-    token0: {
-      symbol: "DAI",
-      name: "Dai Stablecoin",
-      address: "0x6B175474E89094C44Da98b954EedeAC495271d0F",
-      decimals: 18,
-    },
-    token1: {
-      symbol: "USDC",
-      name: "USD Coin",
-      address: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
-      decimals: 6,
-    },
-    feeTier: 100,
-    invertPrice: false,
-    priceLabel: "USDC per DAI",
-  },
-  {
-    address: "0xC2e9F25Be6257c210d7Adf0D4Cd6E3E881ba25f8",
-    token0: {
-      symbol: "DAI",
-      name: "Dai Stablecoin",
-      address: "0x6B175474E89094C44Da98b954EedeAC495271d0F",
-      decimals: 18,
-    },
-    token1: {
-      symbol: "WETH",
-      name: "Wrapped Ether",
-      address: "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
-      decimals: 18,
-    },
-    feeTier: 3000,
-    invertPrice: true,
-    priceLabel: "WETH in DAI",
-  },
-  {
-    address: "0xa6Cc3C2531FdaA6Ae1A3CA84c2855806728693e8",
-    token0: {
-      symbol: "LINK",
-      name: "Chainlink",
-      address: "0x514910771AF9Ca656af840dff83E8264EcF986CA",
-      decimals: 18,
-    },
-    token1: {
-      symbol: "WETH",
-      name: "Wrapped Ether",
-      address: "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
-      decimals: 18,
-    },
-    feeTier: 3000,
-    invertPrice: false,
+    tokenIn:  { address: "0x514910771AF9Ca656af840dff83E8264EcF986CA", symbol: "LINK",  name: "Chainlink",        decimals: 18 },
+    tokenOut: { address: "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2", symbol: "WETH",  name: "Wrapped Ether",   decimals: 18 },
+    amountIn: "10000000000000000000", // 10 LINK
     priceLabel: "WETH per LINK",
   },
   {
-    address: "0x1d42064Fc4Beb5F8aAF85F4617AE8b3b5B8Bd801",
-    token0: {
-      symbol: "UNI",
-      name: "Uniswap",
-      address: "0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984",
-      decimals: 18,
-    },
-    token1: {
-      symbol: "WETH",
-      name: "Wrapped Ether",
-      address: "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
-      decimals: 18,
-    },
-    feeTier: 3000,
-    invertPrice: false,
+    tokenIn:  { address: "0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984", symbol: "UNI",   name: "Uniswap",          decimals: 18 },
+    tokenOut: { address: "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2", symbol: "WETH",  name: "Wrapped Ether",   decimals: 18 },
+    amountIn: "10000000000000000000", // 10 UNI
     priceLabel: "WETH per UNI",
   },
-];
+  {
+    tokenIn:  { address: "0x6B175474E89094C44Da98b954EedeAC495271d0F", symbol: "DAI",   name: "Dai Stablecoin",   decimals: 18 },
+    tokenOut: { address: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", symbol: "USDC",  name: "USD Coin",         decimals: 6  },
+    amountIn: "100000000000000000000", // 100 DAI
+    priceLabel: "USDC per DAI",
+  },
+]
 
-// ─── Synthetic mock pool data (fallback when RPC is unavailable) ─────────────
-// Approximate mainnet values as of Q1 2025 — used ONLY when live RPC fails.
-
-const MOCK_POOLS: PoolSnapshot[] = [
-  {
-    address: "0x88e6A0c2dDD26FEEb64F039a2c41296FcB3f5640",
-    token0Symbol: "USDC",
-    token0Address: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
-    token1Symbol: "WETH",
-    token1Address: "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
-    feePct: 0.05,
-    priceLabel: "WETH in USDC",
-    currentPrice: 3200,
-    virtualToken1: 45000,
-    liquidityRaw: "34028236692093846346337460743176821145664",
-    tick: 202300,
-  },
-  {
-    address: "0x8ad599c3A0ff1De082011EFDDc58f1908eb6e6D8",
-    token0Symbol: "USDC",
-    token0Address: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
-    token1Symbol: "WETH",
-    token1Address: "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
-    feePct: 0.3,
-    priceLabel: "WETH in USDC",
-    currentPrice: 3201,
-    virtualToken1: 28000,
-    liquidityRaw: "15000000000000000000000000",
-    tick: 202300,
-  },
-  {
-    address: "0xCBCdF9626bC03E24f779434178A73a0B4bad62eD",
-    token0Symbol: "WBTC",
-    token0Address: "0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599",
-    token1Symbol: "WETH",
-    token1Address: "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
-    feePct: 0.3,
-    priceLabel: "WETH per WBTC",
-    currentPrice: 29.5,
-    virtualToken1: 18000,
-    liquidityRaw: "8000000000000000000000000",
-    tick: 257000,
-  },
-];
 
 // ─── CoinGecko ID map (symbol → CoinGecko coin id) ───────────────────────────
 
@@ -398,6 +238,8 @@ interface PoolSnapshot {
   currentPrice: number;
   /** virtual token1 amount at current tick — proxy for in-range liquidity */
   virtualToken1: number;
+  /** pre-computed USD value of in-range liquidity — use this directly, do not re-estimate */
+  liquidityUSD: number;
   liquidityRaw: string;
   tick: number;
 }
@@ -410,15 +252,15 @@ produce a structured research report identifying the best candidate token pairs.
 
 Pool data fields explained:
 - currentPrice: human-readable price (see priceLabel for the pair direction)
-- virtualToken1: virtual in-range liquidity in token1 units — larger = more liquid
+- liquidityUSD: pre-computed total USD value of in-range liquidity — use this field directly
+- virtualToken1: virtual in-range liquidity in token1 units (for reference)
 - feePct: pool fee as a percentage (e.g., 0.05 = 0.05%)
-- liquidityRaw: raw uint128 liquidity from the contract
 
 Rules:
-- Only recommend pairs with sufficient liquidity (respect minLiquidityUSD from plan)
-- Estimate liquidityUSD from virtualToken1 and known ETH/USD prices where possible
-- Score candidates based on liquidity depth and fee competitiveness
-- For priceUSD of WETH, use currentPrice from the USDC/WETH pools
+- Use the provided liquidityUSD value directly — do NOT re-estimate or recalculate it
+- Only include candidates where liquidityUSD meets the minLiquidityUSD constraint
+- Score candidates based on liquidityUSD depth and fee competitiveness
+- Use currentPrice as priceUSD for the non-WETH/non-stablecoin token in the pair
 - CRITICAL: The "address" field MUST be the full 42-character hex address (0x...) of the ERC-20 token
   Use token0Address or token1Address from the pool data — NEVER use a symbol like "WETH" as the address
 - Output ONLY valid JSON matching the ResearchReport schema
@@ -487,7 +329,7 @@ export class ResearchAgent {
    * The Planner then reads this report via contextFor() and uses it to plan.
    */
   async run(goal: string, opts: InferOptions = {}): Promise<ResearchReport> {
-    logger.info(`[Researcher] Fetching Uniswap V3 pool data (on-chain)…`);
+    logger.info(`[Researcher] Fetching Uniswap V3 pool data via Uniswap Trading API…`);
 
     const [pools, marketData] = await Promise.all([
       this.fetchOnChainPools(),
@@ -555,85 +397,174 @@ export class ResearchAgent {
     return report;
   }
 
-  // ── On-chain query ──────────────────────────────────────────────────────────
+  // ── Uniswap Trading API pool data fetch ──────────────────────────────────────
 
   private async fetchOnChainPools(): Promise<PoolSnapshot[]> {
-    const { ETH_RPC_URL } = getConfig();
-    // staticNetwork skips auto-detection, preventing "failed to detect network" errors
-    const provider = new ethers.JsonRpcProvider(
-      ETH_RPC_URL,
-      1, // ethereum mainnet
-      { staticNetwork: true },
-    );
+    const { UNISWAP_API_KEY } = getConfig();
+
+    if (!UNISWAP_API_KEY) {
+      throw new Error(
+        "[Researcher] UNISWAP_API_KEY is not set. " +
+          "Add it to your .env file — get a free key at https://developers.uniswap.org/dashboard. " +
+          "Pool data cannot be fetched without a valid Uniswap API key.",
+      );
+    }
 
     const snapshots: PoolSnapshot[] = [];
 
     await Promise.all(
-      KNOWN_POOLS.map(async (def) => {
+      QUERY_PAIRS.map(async (pair) => {
         try {
-          const pool = new ethers.Contract(def.address, POOL_ABI, provider);
+          const res = await fetch(`${UNISWAP_TRADE_API_BASE_URL}/quote`, {
+            method: "POST",
+            headers: {
+              "x-api-key": UNISWAP_API_KEY,
+              "Content-Type": "application/json",
+              Accept: "application/json",
+            },
+            body: JSON.stringify({
+              tokenIn: pair.tokenIn.address,
+              tokenOut: pair.tokenOut.address,
+              tokenInChainId: 1,
+              tokenOutChainId: 1,
+              type: "EXACT_INPUT",
+              amount: pair.amountIn,
+              swapper: QUOTE_SWAPPER_ADDRESS,
+              slippageTolerance: 0.5,
+              protocols: ["V3"],
+            }),
+          });
 
-          // llamarpc rejects eth_call with "latest" tag — use "finalized" instead.
-          const blockTag = "finalized";
-          const contract = pool;
-          const [slot0Result, liquidityResult] = await Promise.all([
-            contract.getFunction("slot0")({ blockTag }) as Promise<
-              [bigint, bigint, ...unknown[]]
-            >,
-            contract.getFunction("liquidity")({ blockTag }) as Promise<bigint>,
-          ]);
+          if (!res.ok) {
+            const errText = await res.text();
+            logger.warn(
+              `[Researcher] Uniswap API ${res.status} for ${pair.tokenIn.symbol}/${pair.tokenOut.symbol}: ${errText}`,
+            );
+            return;
+          }
 
-          const sqrtPriceX96 = slot0Result[0];
-          const tick = Number(slot0Result[1]);
-          const liquidityRaw = liquidityResult;
+          const data = (await res.json()) as UniswapAPIQuoteResponse;
 
-          // price = (sqrtPriceX96 / 2^96)^2  * 10^(d0 - d1)
-          const Q96 = 2n ** 96n;
-          const sqrtPNum = Number(sqrtPriceX96) / Number(Q96);
-          const decimalAdj = Math.pow(
-            10,
-            def.token0.decimals - def.token1.decimals,
-          );
-          const priceRaw = sqrtPNum * sqrtPNum * decimalAdj;
-          const currentPrice = def.invertPrice ? 1 / priceRaw : priceRaw;
+          if (!data.quote || data.quote.route.length === 0) {
+            logger.warn(
+              `[Researcher] No route returned for ${pair.tokenIn.symbol}/${pair.tokenOut.symbol}` +
+                (data.detail ? `: ${data.detail}` : ""),
+            );
+            return;
+          }
 
-          // virtual token1 = L * sqrtPrice / Q96 (in smallest token1 units)
-          // divide by 10^d1 for human-readable amount
-          const virtualToken1Raw =
-            (Number(liquidityRaw) * Number(sqrtPriceX96)) / Number(Q96);
-          const virtualToken1 =
-            virtualToken1Raw / Math.pow(10, def.token1.decimals);
+          // Take the first (best) route's first pool hop
+          const firstPath = data.quote.route[0];
+          if (!firstPath || firstPath.length === 0) return;
+          const pool = firstPath[0]!;
+          if (pool.type !== "v3-pool") return;
+
+          const inputAmt = Number(data.quote.input.amount);
+          const outputAmt = Number(data.quote.output.amount);
+
+          // currentPrice = human-unit output per human-unit input (e.g. 3200 USDC per WETH)
+          const currentPrice =
+            outputAmt /
+            10 ** pair.tokenOut.decimals /
+            (inputAmt / 10 ** pair.tokenIn.decimals);
+
+          // Determine canonical token0/token1 by address order (lower = token0 in V3)
+          const inLow  = pair.tokenIn.address.toLowerCase();
+          const outLow = pair.tokenOut.address.toLowerCase();
+          const [t0, t1] =
+            inLow < outLow
+              ? [pair.tokenIn, pair.tokenOut]
+              : [pair.tokenOut, pair.tokenIn];
+
+          // virtualToken1 ≈ L × sqrtPrice / 2^96 (in token1 human units)
+          const sqrtPriceNum =
+            Number(BigInt(pool.sqrtRatioX96)) / Number(2n ** 96n);
+          const virtualToken1Raw = Number(BigInt(pool.liquidity)) * sqrtPriceNum;
+          const virtualToken1 = virtualToken1Raw / 10 ** t1.decimals;
 
           snapshots.push({
-            address: def.address,
-            token0Symbol: def.token0.symbol,
-            token0Address: def.token0.address,
-            token1Symbol: def.token1.symbol,
-            token1Address: def.token1.address,
-            feePct: def.feeTier / 10000,
-            priceLabel: def.priceLabel,
+            address: pool.address,
+            token0Symbol:  t0.symbol,
+            token0Address: t0.address,
+            token1Symbol:  t1.symbol,
+            token1Address: t1.address,
+            feePct:       parseInt(pool.fee, 10) / 10_000,
+            priceLabel:   pair.priceLabel,
             currentPrice: Number(currentPrice.toFixed(6)),
             virtualToken1: Number(virtualToken1.toFixed(4)),
-            liquidityRaw: liquidityRaw.toString(),
-            tick,
+            liquidityUSD:  0, // filled in post-processing below
+            liquidityRaw:  pool.liquidity,
+            tick:          pool.tick,
           });
+
+          logger.debug(
+            `[Researcher] ${pair.priceLabel}: ${currentPrice.toFixed(4)} ` +
+              `(pool ${pool.address}, fee ${pool.fee})`,
+          );
         } catch (err: unknown) {
           const msg = err instanceof Error ? err.message : String(err);
-          logger.warn(`[Researcher] Skipping pool ${def.address}: ${msg}`);
+          logger.warn(
+            `[Researcher] Failed to quote ${pair.tokenIn.symbol}/${pair.tokenOut.symbol}: ${msg}`,
+          );
         }
       }),
     );
 
-    // Sort by virtualToken1 descending (most liquid first)
-    snapshots.sort((a, b) => b.virtualToken1 - a.virtualToken1);
+    // ── Compute liquidityUSD for each snapshot ────────────────────────────────
+    // Strategy: find WETH/USD from the USDC/WETH or USDT/WETH snapshot, then
+    // use it to price WETH-quoted pairs. Stablecoin-quoted pairs price directly.
+    const stableSymbols = new Set(["USDC", "USDT", "DAI"]);
 
-    // ── Fallback: if RPC failed for all pools, return synthetic mock data ────
-    // This keeps the full 6-agent pipeline running for testing purposes.
-    if (snapshots.length === 0) {
-      logger.warn(
-        "[Researcher] All on-chain queries failed — using synthetic mock pool data",
+    // WETH USD price from the first stable/WETH pair we can find
+    let wethUSD = 0;
+    for (const s of snapshots) {
+      if (
+        (s.token0Symbol === "WETH" && stableSymbols.has(s.token1Symbol)) ||
+        (s.token1Symbol === "WETH" && stableSymbols.has(s.token0Symbol))
+      ) {
+        // currentPrice is stable-per-WETH (e.g. 3200 USDC/WETH) or WETH-per-stable
+        if (stableSymbols.has(s.token1Symbol)) {
+          // price = token1(stable) per token0(WETH) → WETH price = currentPrice
+          wethUSD = s.currentPrice;
+        } else {
+          // price = WETH per stable → WETH price = 1 / currentPrice
+          wethUSD = 1 / s.currentPrice;
+        }
+        if (wethUSD > 100 && wethUSD < 1_000_000) break; // sanity
+      }
+    }
+    if (wethUSD === 0) wethUSD = 3_000; // safe fallback if no WETH/stable pair fetched
+    logger.debug(`[Researcher] WETH/USD reference price: $${wethUSD.toFixed(2)}`);
+
+    for (const s of snapshots) {
+      // virtualToken1 is in t1 human units. Compute USD value of the t1 side, double for t0.
+      const t1Symbol = s.token1Symbol;
+      let t1PriceUSD: number;
+      if (stableSymbols.has(t1Symbol)) {
+        t1PriceUSD = 1; // USDC / USDT / DAI ≈ $1
+      } else if (t1Symbol === "WETH") {
+        t1PriceUSD = wethUSD;
+      } else {
+        t1PriceUSD = 0; // unknown — skip
+      }
+      s.liquidityUSD =
+        t1PriceUSD > 0
+          ? Math.round(s.virtualToken1 * t1PriceUSD * 2)
+          : 0;
+      logger.debug(
+        `[Researcher] ${s.token0Symbol}/${s.token1Symbol} liquidityUSD=$${s.liquidityUSD.toLocaleString()}`,
       );
-      return MOCK_POOLS;
+    }
+
+    // Sort by liquidityUSD descending (most liquid first)
+    snapshots.sort((a, b) => b.liquidityUSD - a.liquidityUSD);
+
+    if (snapshots.length === 0) {
+      throw new Error(
+        "[Researcher] No pool data could be retrieved from the Uniswap Trading API. " +
+          "Verify your UNISWAP_API_KEY is valid, not rate-limited, and that the " +
+          "token pairs have active V3 liquidity. Pipeline cannot proceed without pool data.",
+      );
     }
 
     return snapshots;
