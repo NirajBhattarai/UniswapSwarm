@@ -34,3 +34,66 @@ export const DEFAULTS = {
   MAX_POSITION_USDC: 50,
   RISK_SCORE_PASS_THRESHOLD: 65,
 } as const;
+
+// ─── Stablecoins ───────────────────────────────────────────────────────────────
+// Symbols and Ethereum mainnet addresses for USD-pegged stablecoins.
+// Used by the Strategy/Critic agents to forbid stable→stable swaps (USDC→USDT,
+// DAI→USDC, etc.) which are economically meaningless 1:1 trades and should
+// never appear as proposed "safe trades".
+
+export const STABLECOIN_SYMBOLS: ReadonlySet<string> = new Set([
+  "USDC",
+  "USDT",
+  "DAI",
+  "BUSD",
+  "FRAX",
+  "TUSD",
+  "USDP",
+  "USDD",
+  "GUSD",
+  "LUSD",
+  "USDE", // Ethena
+  "FDUSD", // First Digital USD
+  "PYUSD", // PayPal USD
+  "USDS", // Sky / former MakerDAO
+  "CRVUSD",
+]);
+
+export const STABLECOIN_ADDRESSES: ReadonlySet<string> = new Set(
+  [
+    "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", // USDC
+    "0xdAC17F958D2ee523a2206206994597C13D831ec7", // USDT
+    "0x6B175474E89094C44Da98b954EedeAC495271d0F", // DAI
+    "0x4Fabb145d64652a948d72533023f6E7A623C7C53", // BUSD
+    "0x853d955aCEf822Db058eb8505911ED77F175b99e", // FRAX
+    "0x0000000000085d4780B73119b644AE5ecd22b376", // TUSD
+    "0x8E870D67F660D95d5be530380D0eC0bd388289E1", // USDP (Pax Dollar)
+    "0xc5f0f7b66764F6ec8C8Dff7BA683102295E16409", // FDUSD
+    "0x6c3ea9036406852006290770BEdFcAbA0e23A0e8", // PYUSD
+    "0x4c9EDD5852cd905f086C759E8383e09bff1E68B3", // USDe
+    "0xdC035D45d973E3EC169d2276DDab16f1e407384F", // USDS
+    "0xf939E0A03FB07F59A73314E73794Be0E57ac1b4E", // crvUSD
+    "0x5f98805A4E8be255a32880FDeC7F6728C6568bA0", // LUSD
+  ].map((a) => a.toLowerCase()),
+);
+
+/**
+ * Returns true when a token (resolved by either symbol or on-chain address)
+ * is a USD-pegged stablecoin we want to exclude from non-trivial trades.
+ */
+export function isStablecoinSymbol(symbol?: string): boolean {
+  if (!symbol) return false;
+  return STABLECOIN_SYMBOLS.has(symbol.toUpperCase());
+}
+
+export function isStablecoinAddress(address?: string): boolean {
+  if (!address) return false;
+  return STABLECOIN_ADDRESSES.has(address.toLowerCase());
+}
+
+export function isStablecoin(token: {
+  symbol?: string;
+  address?: string;
+}): boolean {
+  return isStablecoinSymbol(token.symbol) || isStablecoinAddress(token.address);
+}

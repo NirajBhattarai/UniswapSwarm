@@ -37,7 +37,11 @@ export interface UniswapAPIQuoteResponse {
       token: { address: string; decimals: number; symbol: string };
       amount: string;
     };
-    route: UniswapAPIRoutePool[][];
+    /**
+     * `route` is only populated for CLASSIC routings (V2/V3/V4). UNISWAPX
+     * variants (`DUTCH_LIMIT`, `DUTCH_V2`, `DUTCH_V3`) omit it entirely.
+     */
+    route?: UniswapAPIRoutePool[][];
   };
   errorCode?: string;
   detail?: string;

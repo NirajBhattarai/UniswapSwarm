@@ -25,7 +25,7 @@ import {
   SYSTEM_PROMPT,
 } from "./core";
 import {
-  fetchCoinGeckoMarketData,
+  fetchCoinGeckoMarketData as fetchCoinGeckoMarketDataService,
   fetchNarrativeSignal,
   fetchOnChainPools,
 } from "./services";
@@ -104,7 +104,7 @@ export class ResearchAgent {
       ...Object.keys(SYMBOL_TO_COINGECKO_ID),
       ...narrativeSignal.extraSymbols,
     ];
-    const marketData = await fetchCoinGeckoMarketData(allSymbols);
+    const marketData = await fetchCoinGeckoMarketDataService(allSymbols);
 
     const cfg = getConfig();
     const context = this.memory.contextFor(ResearchAgent.MEMORY_KEY);
@@ -169,7 +169,7 @@ export class ResearchAgent {
       Promise.all(
         ordered.map((input) => this.resolveTokenPrice(input, provider)),
       ),
-      fetchCoinGeckoMarketData(ordered),
+      fetchCoinGeckoMarketDataService(ordered),
     ]);
 
     // Merge CoinGecko fields into each result
@@ -187,6 +187,14 @@ export class ResearchAgent {
     }
 
     return { data: results };
+  }
+
+  // ── Public: fetch CoinGecko market data for symbols ─────────────────────────
+  // Used by the orchestrator market endpoint.
+  async fetchCoinGeckoMarketData(
+    symbols: string[],
+  ): Promise<Map<string, CoinGeckoMarketData>> {
+    return fetchCoinGeckoMarketDataService(symbols);
   }
 
   // ── Resolve a single token input (symbol OR address) ─────────────────────────

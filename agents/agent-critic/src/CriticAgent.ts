@@ -1,6 +1,6 @@
 import { ZGCompute, type InferOptions } from "@swarm/compute";
 import { BlackboardMemory } from "@swarm/memory";
-import { logger } from "@swarm/shared";
+import { logger, isStablecoin } from "@swarm/shared";
 import type {
   Critique,
   TradePlan,
@@ -34,7 +34,10 @@ IMPORTANT: Set approved=false if ANY of these are true:
 - Strategy proposes trading unverified tokens
 - Expected profit < estimated gas cost
 - Slippage tolerance seems too high for the liquidity
-- Any critical risk flags were found`;
+- Any critical risk flags were found
+- The strategy is a stablecoin → stablecoin swap (USDC↔USDT, DAI↔USDC,
+  USDC↔FRAX, etc.). These are 1:1 trades with zero economic upside and
+  must always be rejected.`;
 
 export class CriticAgent {
   static readonly MEMORY_KEY = "critic/critique";
@@ -116,6 +119,26 @@ export class CriticAgent {
       critique.approved = false;
       critique.issues.unshift(
         "HARD VETO: Critical risk flag found in assessments",
+      );
+    }
+
+    // Hard override: stablecoin → stablecoin swap is never an acceptable trade
+    const tokenInIsStable = isStablecoin({
+      symbol: strategy.tokenInSymbol,
+      address: strategy.tokenIn,
+    });
+    const tokenOutIsStable = isStablecoin({
+      symbol: strategy.tokenOutSymbol,
+      address: strategy.tokenOut,
+    });
+    if (tokenInIsStable && tokenOutIsStable) {
+      critique.approved = false;
+      critique.confidence = 100;
+      critique.issues.unshift(
+        `HARD VETO: stablecoin → stablecoin swap (${strategy.tokenInSymbol} → ${strategy.tokenOutSymbol}) — 1:1 trade with no upside`,
+      );
+      critique.suggestions.unshift(
+        "Pick a non-stablecoin tokenOut (e.g. WETH, WBTC, ARB, UNI, LINK)",
       );
     }
 

@@ -58,19 +58,43 @@ async function fetchPoolSnapshotForPair(
   try {
     const data = await fetchUniswapQuoteForPair(pair, uniswapApiKey);
     const quote = data?.quote;
-    if (!quote || quote.route.length === 0) {
+
+    // The Trading API can return:
+    //  - a CLASSIC quote with a populated `route: pool[][]` (V2/V3/V4),
+    //  - a UNISWAPX (DUTCH_LIMIT/DUTCH_V2/V3) quote whose payload omits
+    //    `route` entirely or returns it as `undefined`,
+    //  - or an error envelope (`errorCode` + `detail`) with no `quote` at all.
+    // Defensively guard every level so non-classic responses don't crash with
+    // "Cannot read properties of undefined (reading 'length')".
+    if (!quote) {
       logger.warn(
-        `[Researcher] No route returned for ${pair.tokenIn.symbol}/${pair.tokenOut.symbol}` +
-          (data?.detail ? `: ${data.detail}` : ""),
+        `[Researcher] No quote returned for ${pair.tokenIn.symbol}/${pair.tokenOut.symbol}` +
+          (data?.detail ? `: ${data.detail}` : "") +
+          (data?.errorCode ? ` [${data.errorCode}]` : ""),
       );
       return null;
     }
 
-    const firstPath = quote.route[0];
-    if (!firstPath || firstPath.length === 0) return null;
+    const route = Array.isArray(quote.route) ? quote.route : [];
+    if (route.length === 0) {
+      logger.debug(
+        `[Researcher] Skipping ${pair.tokenIn.symbol}/${pair.tokenOut.symbol}: ` +
+          `${data?.routing ?? "non-classic"} routing without an exposed pool route.`,
+      );
+      return null;
+    }
 
-    const pool = firstPath[0]!;
-    if (!pool.type.endsWith("-pool")) return null;
+    const firstPath = Array.isArray(route[0]) ? route[0] : [];
+    if (firstPath.length === 0) return null;
+
+    const pool = firstPath[0];
+    if (
+      !pool ||
+      typeof pool.type !== "string" ||
+      !pool.type.endsWith("-pool")
+    ) {
+      return null;
+    }
 
     const snapshot = buildSnapshotFromQuote(pair, quote, pool);
     logger.debug(
@@ -122,10 +146,13 @@ async function fetchUniswapQuoteForPair(
   return (await res.json()) as UniswapAPIQuoteResponse;
 }
 
+type ClassicQuote = NonNullable<UniswapAPIQuoteResponse["quote"]>;
+type ClassicRoutePool = NonNullable<ClassicQuote["route"]>[number][number];
+
 function buildSnapshotFromQuote(
   pair: QueryPair,
-  quote: NonNullable<UniswapAPIQuoteResponse["quote"]>,
-  pool: NonNullable<UniswapAPIQuoteResponse["quote"]>["route"][number][number],
+  quote: ClassicQuote,
+  pool: ClassicRoutePool,
 ): PoolSnapshot {
   const inputAmt = Number(quote.input.amount);
   const outputAmt = Number(quote.output.amount);

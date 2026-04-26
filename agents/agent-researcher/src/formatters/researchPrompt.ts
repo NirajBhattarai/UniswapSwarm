@@ -1,4 +1,4 @@
-import type { TokenCandidate } from "@swarm/shared";
+import { isStablecoin, type TokenCandidate } from "@swarm/shared";
 
 import type {
   CoinGeckoMarketData,
@@ -84,5 +84,11 @@ export function filterCandidatesByLiquidity(
   candidates: TokenCandidate[],
   minLiquidityUSD: number,
 ): TokenCandidate[] {
-  return candidates.filter((c) => c.liquidityUSD >= minLiquidityUSD);
+  return (
+    candidates
+      .filter((c) => c.liquidityUSD >= minLiquidityUSD)
+      // Drop any stablecoin the LLM tried to slip through. The trade always
+      // starts FROM USDC, so a stable tokenOut is a 1:1 swap with no upside.
+      .filter((c) => !isStablecoin({ symbol: c.symbol, address: c.address }))
+  );
 }

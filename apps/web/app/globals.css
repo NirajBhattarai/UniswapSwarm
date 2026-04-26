@@ -1,0 +1,174 @@
+@import "tailwindcss";
+@import "@copilotkit/react-ui/styles.css";
+
+:root {
+  --background: #ffffff;
+  --foreground: #171717;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #0a0a0a;
+    --foreground: #ededed;
+  }
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+/*
+ * ── Swarm A2A handoff animations ────────────────────────────────────────
+ *
+ * Used by components/a2a/MessageToA2A and MessageFromA2A to make every
+ * orchestrator <-> agent round-trip feel like a live handoff:
+ *
+ *   • swarm-card-in       → slide + fade the card into view on mount
+ *   • swarm-flow-right    → travelling shimmer along the "→" while the
+ *                           orchestrator's task is in flight to the agent
+ *   • swarm-flow-left     → travelling shimmer back along the response arrow
+ *   • swarm-pulse-ring    → soft ring that pulses around the busy agent badge
+ *   • swarm-dot-bounce    → 3-dot "thinking" indicator
+ *   • swarm-chip-in       → tiny stagger-in for storage chips
+ *
+ * Respect users who prefer reduced motion — see the @media block below.
+ */
+
+@keyframes swarm-card-in-left {
+  0%   { opacity: 0; transform: translateX(-12px) scale(0.97); }
+  100% { opacity: 1; transform: translateX(0) scale(1); }
+}
+
+@keyframes swarm-card-in-right {
+  0%   { opacity: 0; transform: translateX(12px) scale(0.97); }
+  100% { opacity: 1; transform: translateX(0) scale(1); }
+}
+
+@keyframes swarm-chip-in {
+  0%   { opacity: 0; transform: translateY(4px) scale(0.95); }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes swarm-flow-right {
+  0%   { background-position: -120% 0; }
+  100% { background-position: 220% 0; }
+}
+
+@keyframes swarm-flow-left {
+  0%   { background-position: 220% 0; }
+  100% { background-position: -120% 0; }
+}
+
+@keyframes swarm-pulse-ring {
+  0%   { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.55); }
+  70%  { box-shadow: 0 0 0 10px rgba(16, 185, 129, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
+}
+
+@keyframes swarm-dot-bounce {
+  0%, 80%, 100% { transform: scale(0.6); opacity: 0.4; }
+  40%           { transform: scale(1);   opacity: 1; }
+}
+
+.swarm-card-in-left  { animation: swarm-card-in-left  220ms cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+.swarm-card-in-right { animation: swarm-card-in-right 240ms cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+.swarm-chip-in       { animation: swarm-chip-in       220ms cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+
+/* Flowing arrow: a gradient line whose background-position animates so a
+   shimmer "drains" across it. The element is sized via classes and doesn't
+   need to know its own width. */
+.swarm-arrow {
+  position: relative;
+  display: inline-block;
+  height: 2px;
+  width: 28px;
+  border-radius: 9999px;
+  background: linear-gradient(
+    90deg,
+    rgba(148, 163, 184, 0.35) 0%,
+    rgba(148, 163, 184, 0.35) 35%,
+    rgba(16, 185, 129, 0.95) 50%,
+    rgba(148, 163, 184, 0.35) 65%,
+    rgba(148, 163, 184, 0.35) 100%
+  );
+  background-size: 220% 100%;
+  background-position: -120% 0;
+}
+
+.swarm-arrow.is-busy        { animation: swarm-flow-right 1.2s linear infinite; }
+.swarm-arrow.is-busy-reverse {
+  background: linear-gradient(
+    90deg,
+    rgba(148, 163, 184, 0.35) 0%,
+    rgba(148, 163, 184, 0.35) 35%,
+    rgba(56, 189, 248, 0.95) 50%,
+    rgba(148, 163, 184, 0.35) 65%,
+    rgba(148, 163, 184, 0.35) 100%
+  );
+  background-size: 220% 100%;
+  animation: swarm-flow-left 1.2s linear infinite;
+}
+
+.swarm-arrow.is-done        {
+  background: linear-gradient(
+    90deg,
+    rgba(148, 163, 184, 0.55) 0%,
+    rgba(148, 163, 184, 0.55) 100%
+  );
+}
+
+/* Caret that rides on top of the arrow line so the direction is obvious. */
+.swarm-arrow::after {
+  content: "";
+  position: absolute;
+  right: -4px;
+  top: 50%;
+  width: 0;
+  height: 0;
+  border-style: solid;
+  border-width: 4px 0 4px 6px;
+  border-color: transparent transparent transparent rgba(100, 116, 139, 0.7);
+  transform: translateY(-50%);
+}
+
+.swarm-arrow.is-reverse::after {
+  right: auto;
+  left: -4px;
+  border-width: 4px 6px 4px 0;
+  border-color: transparent rgba(100, 116, 139, 0.7) transparent transparent;
+}
+
+.swarm-pulse-ring { animation: swarm-pulse-ring 1.4s ease-out infinite; }
+
+.swarm-dots span {
+  display: inline-block;
+  width: 4px;
+  height: 4px;
+  margin: 0 1px;
+  border-radius: 9999px;
+  background: currentColor;
+  animation: swarm-dot-bounce 1s infinite;
+}
+.swarm-dots span:nth-child(2) { animation-delay: 0.15s; }
+.swarm-dots span:nth-child(3) { animation-delay: 0.3s; }
+
+@media (prefers-reduced-motion: reduce) {
+  .swarm-card-in-left,
+  .swarm-card-in-right,
+  .swarm-chip-in,
+  .swarm-arrow.is-busy,
+  .swarm-arrow.is-busy-reverse,
+  .swarm-pulse-ring,
+  .swarm-dots span {
+    animation: none !important;
+  }
+}

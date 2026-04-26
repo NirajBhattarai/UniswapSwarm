@@ -39,6 +39,11 @@ General rules:
 - Only include candidates where liquidityUSD meets the minLiquidityUSD constraint
 - CRITICAL: The "address" field MUST be the \`tokenAddress\` value from the pool snapshot — copy it verbatim
   NEVER use \`poolAddress\` as \`address\`. NEVER use a symbol string as an address.
+- NEVER include stablecoins (USDC, USDT, DAI, BUSD, FRAX, TUSD, USDP, FDUSD,
+  PYUSD, USDe, USDS, crvUSD, LUSD, GUSD, etc.) as candidates. The trade
+  starts FROM a stablecoin (USDC), so a stablecoin tokenOut is a 1:1 swap
+  with no upside. Candidates must be non-stablecoin assets only — even if
+  a stablecoin pool has the deepest liquidity, skip it.
 - Output ONLY valid JSON matching the ResearchReport schema
 - Never fabricate — use only the on-chain data provided
 

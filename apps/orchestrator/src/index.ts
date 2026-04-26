@@ -1,6 +1,7 @@
 import "dotenv/config";
 import { SwarmOrchestrator } from "./orchestrator";
 import { startServer } from "./server";
+import { startSwarmA2AAgentServers } from "./a2aAgents";
 import { logger, getConfig } from "@swarm/shared";
 
 async function main(): Promise<void> {
@@ -17,11 +18,18 @@ async function main(): Promise<void> {
   const orchestrator = new SwarmOrchestrator();
   await orchestrator.init();
 
-  // Start HTTP API (non-blocking)
+  // Start HTTP API (non-blocking) — legacy /cycle, /agents/*, /a2a/jsonrpc
   await startServer(orchestrator);
 
-  // If CYCLE_INTERVAL_MS > 0, run autonomous cycling
-  if (cfg.CYCLE_INTERVAL_MS > 0) {
+  // Start one standalone A2A server per Uniswap Swarm agent. The CopilotKit
+  // A2A middleware in apps/web registers each of these URLs and the
+  // orchestrator LLM can reach any agent via `send_message_to_a2a_agent`.
+  await startSwarmA2AAgentServers(orchestrator);
+
+  // Autonomous cycling is disabled by default.
+  // Set AUTO_CYCLE_ENABLED=true to opt in.
+  const autoCycleEnabled = process.env.AUTO_CYCLE_ENABLED === "true";
+  if (autoCycleEnabled && cfg.CYCLE_INTERVAL_MS > 0) {
     logger.info(
       `[Swarm] Autonomous mode — cycling every ${cfg.CYCLE_INTERVAL_MS / 1000}s`,
     );
@@ -37,6 +45,10 @@ async function main(): Promise<void> {
       }, cfg.CYCLE_INTERVAL_MS);
     };
     void loop();
+  } else {
+    logger.info(
+      "[Swarm] Autonomous mode disabled (set AUTO_CYCLE_ENABLED=true to enable)",
+    );
   }
 }
 

@@ -174,6 +174,61 @@ Each agent can also be invoked individually. All support both a blocking JSON fo
 pnpm --filter orchestrator dev
 ```
 
+### CopilotKit A2A web cockpit
+
+The `apps/web` Next.js app implements the same multi-agent UI pattern as
+[CopilotKit/a2a-travel](https://github.com/CopilotKit/a2a-travel), but tailored to
+the Uniswap swap pipeline. Each Uniswap Swarm agent is exposed as its own
+A2A server, and a `A2AMiddlewareAgent` wraps a Gemini-backed orchestration
+agent and auto-injects the `send_message_to_a2a_agent` tool.
+
+```
+apps/web (CopilotKit + AG-UI)
+   │
+   │  AG-UI Protocol (in-process)
+   ▼
+SwarmOrchestrationAgent (Gemini)
+   │
+   │  send_message_to_a2a_agent tool (injected by A2AMiddlewareAgent)
+   ▼
+┌──────────────┬────────────┬──────────────┬──────────────┬────────────┬──────────────┐
+│ Researcher   │ Planner    │ Risk         │ Strategy     │ Critic     │ Executor     │
+│ :4101        │ :4102      │ :4103        │ :4104        │ :4105      │ :4106        │
+└──────────────┴────────────┴──────────────┴──────────────┴────────────┴──────────────┘
+                       (each is a standalone A2A JSON-RPC server)
+```
+
+```sh
+# Run orchestrator + 6 A2A agent servers + Next.js web UI in parallel
+pnpm dev
+```
+
+Then open http://localhost:3000.
+
+The UI ships with two HITL flows that mirror the trip-requirements / budget
+approval workflow from a2a-travel:
+
+- `gather_swap_intent` — pre-trade form (token-in, token-out, USD size, risk level)
+- `request_trade_approval` — post-critic approval card before the executor signs
+
+Each `send_message_to_a2a_agent` call is rendered inline in the chat as a green
+"orchestrator → agent" card and a follow-up blue "agent → orchestrator"
+response card. Structured JSON returned by each agent is also extracted into
+the right-hand sidebar (Researcher candidates, Plan tasks, Risk verdicts, …).
+
+Required environment variables (see `.env.example`):
+
+```env
+GOOGLE_GENERATIVE_AI_API_KEY=...   # or GOOGLE_API_KEY / GEMINI_API_KEY
+COPILOTKIT_MODEL=gemini-2.5-flash
+RESEARCHER_PORT=4101
+PLANNER_PORT=4102
+RISK_PORT=4103
+STRATEGY_PORT=4104
+CRITIC_PORT=4105
+EXECUTOR_PORT=4106
+```
+
 ---
 
 ## How a Cycle Works
