@@ -1,29 +1,31 @@
 # UniswapSwarm
 
-An autonomous AI agent swarm that identifies and executes profitable, low-risk token swaps on **Uniswap V3** (Ethereum mainnet). Built on top of the **0G Compute Network** for verifiable, decentralised LLM inference.
+An autonomous AI agent swarm that identifies and executes profitable, low-risk token swaps across **Uniswap V2/V3/V4 and UniswapX** (Ethereum mainnet). Built on top of the **0G Compute Network** for verifiable, decentralised LLM inference and **0G Storage** for on-chain audit trails.
 
-> **Capital preservation first.** The swarm is tuned to prioritise safety over yield — every trade is planned, researched, risk-scored, strategised, and critiqued before execution.
+> **Capital preservation first.** The swarm is tuned to prioritise safety over yield — every trade is researched, planned, risk-scored, strategised, and critiqued before execution.
 
 ---
 
 ## Architecture
 
-The swarm runs a sequential pipeline of specialised agents that share a common **Blackboard Memory** per cycle:
+The swarm runs a sequential pipeline of specialised agents that share a common **Blackboard Memory** per cycle. Each agent writes its output to in-process memory that is simultaneously persisted to **0G Storage** as an immutable, on-chain audit trail.
 
 ```
-Planner → Researcher → Risk → Strategy → Critic → Executor
+Researcher → Planner → Risk → Strategy → Critic → Executor
 ```
 
-| Agent          | Package            | Role                                                                                 |
-| -------------- | ------------------ | ------------------------------------------------------------------------------------ |
-| **Planner**    | `agent-planner`    | Breaks the high-level goal into a structured `TradePlan` with tasks and constraints  |
-| **Researcher** | `agent-researcher` | Scans Uniswap V3 pools and returns ranked `TokenCandidate` objects                   |
-| **Risk**       | `agent-risk`       | Scores each candidate (honeypot, low liquidity, MEV risk, …) and flags unsafe tokens |
-| **Strategy**   | `agent-strategy`   | Selects the best trade route, sizes the position, and sets slippage/fee parameters   |
-| **Critic**     | `agent-critic`     | Reviews the fully assembled plan and approves or rejects it with a confidence score  |
-| **Executor**   | `agent-executor`   | Submits the swap via Uniswap V3's `SwapRouter` (supports dry-run mode)               |
+| Agent          | Package            | Role                                                                                                  |
+| -------------- | ------------------ | ----------------------------------------------------------------------------------------------------- |
+| **Researcher** | `agent-researcher` | Fetches live multi-protocol Uniswap pool data, CoinGecko market data, Fear & Greed index, Reddit/news narrative signal, and returns ranked `TokenCandidate` objects |
+| **Planner**    | `agent-planner`    | Reads Researcher output and produces a structured `TradePlan` with strategy type, constraints, and tasks |
+| **Risk**       | `agent-risk`       | Scores each candidate (honeypot, low liquidity, MEV risk, …) and flags unsafe tokens                  |
+| **Strategy**   | `agent-strategy`   | Selects the best trade route, sizes the position, and sets slippage/fee parameters                    |
+| **Critic**     | `agent-critic`     | Reviews the fully assembled plan and approves or rejects it with a confidence score                   |
+| **Executor**   | `agent-executor`   | Submits the swap via Uniswap's `SwapRouter02` (supports dry-run and simulation-only modes)            |
 
-All LLM calls go through `@swarm/compute` — a thin wrapper around the [0G Serving Broker](https://github.com/0glabs/0g-serving-broker) that auto-manages ledger deposits and provider acknowledgement.
+All LLM calls go through `@swarm/compute` (`ZGCompute`) — a thin wrapper around the [0G Serving Broker](https://github.com/0glabs/0g-serving-broker) that auto-manages ledger deposits and provider acknowledgement.
+
+All agent outputs are persisted via `@swarm/memory` (`ZGStorage`) to the [0G Storage network](https://docs.0g.ai) for cross-cycle auditability.
 
 ---
 
@@ -34,18 +36,20 @@ uniswapswarm/
 ├── apps/
 │   └── orchestrator/       # Express REST server + cycle runner
 ├── agents/
+│   ├── agent-researcher/   # Uniswap Trading API, CoinGecko, Fear&Greed, narrative detection
 │   ├── agent-planner/
-│   ├── agent-researcher/
 │   ├── agent-risk/
 │   ├── agent-strategy/
 │   ├── agent-critic/
 │   └── agent-executor/
-└── packages/
-    ├── compute/            # 0G Compute Network client (ZGCompute)
-    ├── memory/             # BlackboardMemory — shared agent state per cycle
-    ├── shared/             # Config, types, logger, constants
-    ├── eslint-config/
-    └── typescript-config/
+├── packages/
+│   ├── compute/            # ZGCompute — 0G Compute Network client
+│   ├── memory/             # BlackboardMemory + ZGStorage — shared agent state & on-chain audit
+│   ├── shared/             # Config (Zod-validated), types, logger, constants
+│   ├── eslint-config/
+│   └── typescript-config/
+└── scripts/
+    └── fund-ledger.ts      # Utility: fund / top-up the 0G Compute ledger
 ```
 
 Built with [Turborepo](https://turbo.build/) and [pnpm workspaces](https://pnpm.io/workspaces).
@@ -56,7 +60,7 @@ Built with [Turborepo](https://turbo.build/) and [pnpm workspaces](https://pnpm.
 
 | Tool               | Version                           |
 | ------------------ | --------------------------------- |
-| Node.js            | ≥ 20                              |
+| Node.js            | ≥ 18                              |
 | pnpm               | ≥ 9                               |
 | A funded 0G wallet | See [0G docs](https://docs.0g.ai) |
 
@@ -80,20 +84,35 @@ Copy the example and fill in your keys:
 cp .env.example .env
 ```
 
-| Variable               | Description                                              |
-| ---------------------- | -------------------------------------------------------- |
-| `ZG_PRIVATE_KEY`       | Private key of a funded 0G wallet (64-char hex, no `0x`) |
-| `ZG_CHAIN_RPC`         | 0G EVM RPC (default: `https://evmrpc-testnet.0g.ai`)     |
-| `ETH_RPC_URL`          | Ethereum mainnet RPC (Alchemy / Infura)                  |
-| `ZG_COMPUTE_RPC`       | 0G Compute indexer RPC                                   |
-| `MAX_SLIPPAGE_PCT`     | Maximum swap slippage % (default: `1.5`)                 |
-| `MAX_POSITION_USDC`    | Maximum position size in USDC (default: `50`)            |
-| `MIN_LIQUIDITY_USD`    | Minimum pool liquidity required (default: `100000`)      |
-| `MAX_GAS_GWEI`         | Gas price ceiling in Gwei (default: `30`)                |
-| `RISK_SCORE_THRESHOLD` | Minimum risk score to proceed (0–100, default: `70`)     |
-| `DRY_RUN`              | Set `true` to simulate swaps without submitting on-chain |
+| Variable               | Required | Description                                                                 |
+| ---------------------- | -------- | --------------------------------------------------------------------------- |
+| `ZG_PRIVATE_KEY`       | **yes**  | Private key of a funded 0G wallet (64-char hex, no `0x`)                   |
+| `ZG_CHAIN_RPC`         | no       | 0G EVM RPC (default: `https://evmrpc-testnet.0g.ai`)                        |
+| `ETH_RPC_URL`          | no       | Ethereum mainnet RPC (default: `https://eth.llamarpc.com`)                  |
+| `ZG_COMPUTE_RPC`       | no       | 0G Compute indexer RPC (default: `https://indexer-storage-testnet-turbo.0g.ai`) |
+| `ZG_STORAGE_RPC`       | no       | 0G Storage RPC (default: `https://evmrpc-testnet.0g.ai`)                    |
+| `ZG_INDEXER_RPC`       | no       | 0G Storage indexer RPC (default: `https://indexer-storage-testnet-turbo.0g.ai`) |
+| `ZG_FLOW_CONTRACT`     | no       | 0G Flow contract address (default: `0xbD2C3F0E65eDF5582141C35969d66e205E00C9c8`) |
+| `UNISWAP_API_KEY`      | no       | Uniswap Trading API key (https://developers.uniswap.org/dashboard)          |
+| `COINGECKO_API_KEY`    | no       | CoinGecko API key — free demo key or pro key (https://www.coingecko.com/en/api) |
+| `MAX_SLIPPAGE_PCT`     | no       | Maximum swap slippage % (default: `1.5`)                                    |
+| `MAX_POSITION_USDC`    | no       | Maximum position size in USDC (default: `50`)                               |
+| `MIN_LIQUIDITY_USD`    | no       | Minimum pool liquidity required (default: `100000`)                         |
+| `MAX_GAS_GWEI`         | no       | Gas price ceiling in Gwei (default: `30`)                                   |
+| `RISK_SCORE_THRESHOLD` | no       | Minimum risk score to proceed (0–100, default: `70`)                        |
+| `DRY_RUN`              | no       | `true` to simulate swaps without submitting on-chain (default: `true`)      |
+| `CYCLE_INTERVAL_MS`    | no       | Milliseconds between autonomous cycles (default: `300000` = 5 min)          |
+| `PORT`                 | no       | REST server port (default: `4000`)                                          |
 
-### 3. Build
+### 3. Fund the 0G Compute ledger
+
+Before first use, top up your 0G Compute ledger (target: 5 OG, keeps 1 OG reserve in wallet):
+
+```sh
+pnpm tsx scripts/fund-ledger.ts
+```
+
+### 4. Build
 
 ```sh
 pnpm build
@@ -109,15 +128,45 @@ pnpm build
 pnpm --filter orchestrator start
 ```
 
-The server starts on port `3000` by default.
+The server starts on port `4000` by default (override with `PORT` env var).
 
-#### Endpoints
+#### Full-pipeline endpoints
 
 | Method | Path            | Description                                       |
 | ------ | --------------- | ------------------------------------------------- |
-| `GET`  | `/health`       | Liveness check                                    |
+| `GET`  | `/health`       | Liveness check (`{ status, running }`)            |
 | `POST` | `/cycle`        | Run one full agent cycle (blocking JSON response) |
 | `POST` | `/cycle/stream` | Run one full agent cycle with SSE event streaming |
+
+#### Per-agent endpoints
+
+Each agent can also be invoked individually. All support both a blocking JSON form and a Server-Sent Events stream form.
+
+| Method | Path                                  | Body                     | Description                                   |
+| ------ | ------------------------------------- | ------------------------ | --------------------------------------------- |
+| `POST` | `/agents/researcher`                  | `{ goal?: string }`      | Run Researcher agent (JSON)                   |
+| `POST` | `/agents/researcher/stream`           | `{ goal?: string }`      | Run Researcher agent (SSE)                    |
+| `POST` | `/agents/researcher/prices`           | `{ tokens: string[] }`   | Fetch live prices for a list of token symbols |
+| `POST` | `/agents/researcher/prices/stream`    | `{ tokens: string[] }`   | Same, as SSE                                  |
+| `POST` | `/agents/researcher/market`           | `{ tokens: string[] }`   | Fetch CoinGecko 24h market data               |
+| `POST` | `/agents/planner`                     | `{ goal?: string }`      | Run Planner agent (JSON)                      |
+| `POST` | `/agents/planner/stream`              | `{ goal?: string }`      | Run Planner agent (SSE)                       |
+| `POST` | `/agents/risk`                        | —                        | Run Risk agent (reads memory)                 |
+| `POST` | `/agents/risk/stream`                 | —                        | Run Risk agent (SSE)                          |
+| `POST` | `/agents/strategy`                    | —                        | Run Strategy agent (reads memory)             |
+| `POST` | `/agents/strategy/stream`             | —                        | Run Strategy agent (SSE)                      |
+| `POST` | `/agents/critic`                      | —                        | Run Critic agent (reads memory)               |
+| `POST` | `/agents/critic/stream`               | —                        | Run Critic agent (SSE)                        |
+| `POST` | `/agents/executor`                    | —                        | Run Executor agent (reads memory)             |
+| `POST` | `/agents/executor/stream`             | —                        | Run Executor agent (SSE)                      |
+
+#### State endpoints
+
+| Method | Path       | Description                          |
+| ------ | ---------- | ------------------------------------ |
+| `GET`  | `/memory`  | Dump current blackboard memory       |
+| `GET`  | `/history` | All cycle states from this session   |
+| `GET`  | `/latest`  | Most recent completed cycle state    |
 
 ### Single cycle (CLI)
 
@@ -129,14 +178,27 @@ pnpm --filter orchestrator dev
 
 ## How a Cycle Works
 
-1. **Planner** receives the static goal and produces a `TradePlan` (strategy type, constraints, task list).
-2. **Researcher** fetches live Uniswap V3 pool data and scores token candidates by volume, liquidity, and price momentum.
-3. **Risk Agent** runs each candidate through a suite of checks (honeypot detection, ownership concentration, MEV exposure, …) and produces a `RiskAssessment`.
-4. **Strategy Agent** picks the highest-scoring safe candidate and crafts an exact swap calldata spec (`TradeStrategy`).
-5. **Critic Agent** performs a final holistic review and either approves or rejects the plan.
-6. **Executor** — if approved — calls Uniswap V3's `SwapRouter`. In `DRY_RUN=true` mode it logs the would-be transaction without sending it.
+Every agent writes its output to the shared `BlackboardMemory`. Each write is simultaneously uploaded to **0G Storage** as an immutable root hash, forming an on-chain audit trail. Every downstream agent reads prior outputs from that same memory via `memory.contextFor()`.
 
-All intermediate outputs are written to the shared `BlackboardMemory` so every downstream agent can read what came before it.
+1. **Researcher** fetches live multi-protocol Uniswap pool data (V2/V3/V4/UniswapX) via the Uniswap Trading API, scrapes the Fear & Greed index and Reddit/news headlines via a TLS-spoofed browser client (`impit`), pulls CoinGecko 24h market data, detects the current market narrative (`ai | safe_haven | defi | l2 | staking | neutral`), and writes `researcher/report` to shared memory.
+2. **Planner** reads `researcher/report` from memory and produces a `TradePlan` (strategy type, conservative constraints, per-agent task list), writing `planner/plan`.
+3. **Risk Agent** reads `planner/plan` + `researcher/report` and runs each candidate through honeypot detection, ownership concentration checks, MEV exposure scoring, and more — writing `risk/assessments`.
+4. **Strategy Agent** reads all prior memory, picks the highest-scoring safe candidate, and crafts an exact swap calldata spec (`TradeStrategy`), writing `strategy/proposal`.
+5. **Critic Agent** reads all memory entries, performs a holistic review, and either approves or rejects with a confidence score + issues list — writing `critic/critique`.
+6. **Executor** — if the Critic approved — calls Uniswap's `SwapRouter02` via `exactInputSingle`. A **`SIMULATION_ONLY` hard guard** in the code defaults to simulation regardless of `DRY_RUN`. Set it to `false` and `DRY_RUN=false` only when the wallet is funded and live trading is intended.
+
+---
+
+## Blackboard Memory Keys
+
+| Key                  | Written by  | Content                        |
+| -------------------- | ----------- | ------------------------------ |
+| `researcher/report`  | Researcher  | `ResearchReport` (candidates)  |
+| `planner/plan`       | Planner     | `TradePlan`                    |
+| `risk/assessments`   | Risk        | `RiskAssessment[]`             |
+| `strategy/proposal`  | Strategy    | `TradeStrategy`                |
+| `critic/critique`    | Critic      | `Critique`                     |
+| `executor/result`    | Executor    | `ExecutionResult`              |
 
 ---
 
@@ -144,7 +206,7 @@ All intermediate outputs are written to the shared `BlackboardMemory` so every d
 
 ```sh
 # Type-check all packages
-pnpm typecheck
+pnpm check-types
 
 # Lint
 pnpm lint
@@ -158,123 +220,15 @@ pnpm --filter @swarm/compute dev
 ## Key Dependencies
 
 - [`@0glabs/0g-serving-broker`](https://www.npmjs.com/package/@0glabs/0g-serving-broker) — 0G Compute paymaster & inference client
-- [`@uniswap/v3-sdk`](https://www.npmjs.com/package/@uniswap/v3-sdk) — Uniswap V3 quote & routing
+- [`@0gfoundation/0g-ts-sdk`](https://www.npmjs.com/package/@0gfoundation/0g-ts-sdk) — 0G Storage SDK (file upload / root hash)
 - [`ethers`](https://www.npmjs.com/package/ethers) v6 — Ethereum wallet & provider
-- [`zod`](https://www.npmjs.com/package/zod) — Runtime config validation
+- [`impit`](https://www.npmjs.com/package/impit) — TLS-fingerprint spoofer for bot-detection bypass (Fear & Greed, Reddit)
+- [`zod`](https://www.npmjs.com/package/zod) — Runtime config & env validation
 - [`express`](https://www.npmjs.com/package/express) — REST API server
+- [`uuid`](https://www.npmjs.com/package/uuid) — Cycle ID generation
 
 ---
 
 ## License
 
 MIT
-pnpm dlx turbo build
-pnpm exec turbo build
-
-````
-
-You can build a specific package by using a [filter](https://turborepo.dev/docs/crafting-your-repository/running-tasks#using-filters):
-
-With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed:
-
-```sh
-turbo build --filter=docs
-````
-
-Without global `turbo`:
-
-```sh
-npx turbo build --filter=docs
-pnpm exec turbo build --filter=docs
-pnpm exec turbo build --filter=docs
-```
-
-### Develop
-
-To develop all apps and packages, run the following command:
-
-With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed (recommended):
-
-```sh
-cd my-turborepo
-turbo dev
-```
-
-Without global `turbo`, use your package manager:
-
-```sh
-cd my-turborepo
-npx turbo dev
-pnpm exec turbo dev
-pnpm exec turbo dev
-```
-
-You can develop a specific package by using a [filter](https://turborepo.dev/docs/crafting-your-repository/running-tasks#using-filters):
-
-With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed:
-
-```sh
-turbo dev --filter=web
-```
-
-Without global `turbo`:
-
-```sh
-npx turbo dev --filter=web
-pnpm exec turbo dev --filter=web
-pnpm exec turbo dev --filter=web
-```
-
-### Remote Caching
-
-> [!TIP]
-> Vercel Remote Cache is free for all plans. Get started today at [vercel.com](https://vercel.com/signup?utm_source=remote-cache-sdk&utm_campaign=free_remote_cache).
-
-Turborepo can use a technique known as [Remote Caching](https://turborepo.dev/docs/core-concepts/remote-caching) to share cache artifacts across machines, enabling you to share build caches with your team and CI/CD pipelines.
-
-By default, Turborepo will cache locally. To enable Remote Caching you will need an account with Vercel. If you don't have an account you can [create one](https://vercel.com/signup?utm_source=turborepo-examples), then enter the following commands:
-
-With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed (recommended):
-
-```sh
-cd my-turborepo
-turbo login
-```
-
-Without global `turbo`, use your package manager:
-
-```sh
-cd my-turborepo
-npx turbo login
-pnpm exec turbo login
-pnpm exec turbo login
-```
-
-This will authenticate the Turborepo CLI with your [Vercel account](https://vercel.com/docs/concepts/personal-accounts/overview).
-
-Next, you can link your Turborepo to your Remote Cache by running the following command from the root of your Turborepo:
-
-With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed:
-
-```sh
-turbo link
-```
-
-Without global `turbo`:
-
-```sh
-npx turbo link
-pnpm exec turbo link
-pnpm exec turbo link
-```
-
-## Useful Links
-
-Learn more about the power of Turborepo:
-
-- [Tasks](https://turborepo.dev/docs/crafting-your-repository/running-tasks)
-- [Caching](https://turborepo.dev/docs/crafting-your-repository/caching)
-- [Remote Caching](https://turborepo.dev/docs/core-concepts/remote-caching)
-- [Filtering](https://turborepo.dev/docs/crafting-your-repository/running-tasks#using-filters)
-- [Configuration Options](https://turborepo.dev/docs/reference/configuration)
-- [CLI Usage](https://turborepo.dev/docs/reference/command-line-reference)
