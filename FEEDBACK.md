@@ -59,7 +59,7 @@ For **Uniswap v4**, there is currently no built-in oracle. A TWAP requires a cus
 
 The Uniswap Trading API (`/quote`, `/swap`, `/check_approval`) is entirely focused on trade execution. There is no endpoint for **pool trading volume**, **TVL**, **fee revenue**, or **transaction count**. The `uniswap-ai` skill set similarly has no skill that helps developers query these metrics.
 
-Because this data is absent from Uniswap's own developer surface, teams are forced to integrate DeFiLlama and CoinGecko just to answer basic questions like *"how much volume did this pool do in the last 24 hours?"*. Both of those providers have their own latency, API key requirements, and coverage gaps — particularly for newer or lower-liquidity pools that may not yet be indexed.
+Because this data is absent from Uniswap's own developer surface, teams are forced to integrate DeFiLlama and CoinGecko just to answer basic questions like _"how much volume did this pool do in the last 24 hours?"_. Both of those providers have their own latency, API key requirements, and coverage gaps — particularly for newer or lower-liquidity pools that may not yet be indexed.
 
 ### What already exists at the protocol level
 
@@ -75,10 +75,10 @@ The Uniswap v3 Subgraph (hosted on The Graph) exposes exactly this data at per-p
     first: 7
   ) {
     date
-    volumeUSD   # total USD volume traded that day
-    tvlUSD      # total value locked at close of day
-    feesUSD     # protocol fees earned
-    txCount     # number of swap transactions
+    volumeUSD # total USD volume traded that day
+    tvlUSD # total value locked at close of day
+    feesUSD # protocol fees earned
+    txCount # number of swap transactions
   }
 }
 
@@ -112,13 +112,13 @@ This data is Uniswap-native, pool-level precise, and does not require a third-pa
 
 ## Summary
 
-| Feature | Protocol support today | `uniswap-ai` skill | Trading API endpoint |
-|---|---|---|---|
-| TWAP price (v3) | ✅ `pool.observe()` + `OracleLibrary` | ❌ Missing | ❌ Missing |
-| TWAP hook (v4) | ⚠️ Requires custom `afterSwap` hook | ❌ No reference example | ❌ N/A |
-| Pool volume (24h) | ✅ v3 Subgraph `poolDayData.volumeUSD` | ❌ Missing | ❌ Missing |
-| Pool TVL | ✅ v3 Subgraph `poolDayData.tvlUSD` | ❌ Missing | ❌ Missing |
-| Pool fee revenue | ✅ v3 Subgraph `poolDayData.feesUSD` | ❌ Missing | ❌ Missing |
+| Feature           | Protocol support today                 | `uniswap-ai` skill      | Trading API endpoint |
+| ----------------- | -------------------------------------- | ----------------------- | -------------------- |
+| TWAP price (v3)   | ✅ `pool.observe()` + `OracleLibrary`  | ❌ Missing              | ❌ Missing           |
+| TWAP hook (v4)    | ⚠️ Requires custom `afterSwap` hook    | ❌ No reference example | ❌ N/A               |
+| Pool volume (24h) | ✅ v3 Subgraph `poolDayData.volumeUSD` | ❌ Missing              | ❌ Missing           |
+| Pool TVL          | ✅ v3 Subgraph `poolDayData.tvlUSD`    | ❌ Missing              | ❌ Missing           |
+| Pool fee revenue  | ✅ v3 Subgraph `poolDayData.feesUSD`   | ❌ Missing              | ❌ Missing           |
 
 Both features are fully supported at the protocol level. Surfacing them through `uniswap-ai` skills and/or the Trading API would significantly reduce the integration burden for developers building on Uniswap and would keep the ecosystem self-contained — removing the dependency on DeFiLlama and CoinGecko for data that Uniswap already produces natively.
 

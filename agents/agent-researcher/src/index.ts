@@ -3,4 +3,6 @@ export type {
   TokenPriceResult,
   PriceQuoteResponse,
   CoinGeckoMarketData,
-} from "./ResearchAgent";
+  NarrativeSignal,
+  NarrativeType,
+} from "./types";

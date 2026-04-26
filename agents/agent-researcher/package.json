@@ -19,7 +19,8 @@
     "@swarm/compute": "workspace:*",
     "@swarm/memory": "workspace:*",
     "@swarm/shared": "workspace:*",
-    "ethers": "^6.13.2"
+    "ethers": "^6.13.2",
+    "impit": "^0.13.1"
   },
   "devDependencies": {
     "@repo/typescript-config": "workspace:*",

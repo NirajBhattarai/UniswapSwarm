@@ -9,286 +9,38 @@ import {
 } from "@swarm/shared";
 import type { ResearchReport, TokenCandidate } from "@swarm/shared";
 import { ethers } from "ethers";
+import { Impit } from "impit";
 
-// ─── Minimal Uniswap V3 Pool ABI ──────────────────────────────────────────────
+import {
+  POOL_ABI,
+  QUOTER_V2_ABI,
+  FACTORY_ABI,
+  ERC20_META_ABI,
+  SYMBOL_TO_TOKEN,
+  ADDRESS_TO_SYMBOL,
+  USDC_DEF,
+  WETH_DEF,
+  FEE_TIERS,
+  MIN_POOL_LIQUIDITY_USD,
+  QUOTE_SWAPPER_ADDRESS,
+  QUERY_PAIRS,
+  SYMBOL_TO_COINGECKO_ID,
+  NARRATIVE_KEYWORDS,
+  NARRATIVE_EXTRA_SYMBOLS,
+} from "./constants";
+import { SYSTEM_PROMPT } from "./prompts";
+import type {
+  TokenDef,
+  UniswapAPIQuoteResponse,
+  PoolSnapshot,
+  NarrativeType,
+  NarrativeSignal,
+  CoinGeckoMarketData,
+  TokenPriceResult,
+  PriceQuoteResponse,
+} from "./types";
 
-const POOL_ABI = [
-  "function slot0() external view returns (uint160 sqrtPriceX96, int24 tick, uint16, uint16, uint16, uint8, bool)",
-  "function liquidity() external view returns (uint128)",
-];
-
-// ─── Uniswap V3 QuoterV2 ABI (quoteExactInputSingle) ─────────────────────────
-// quoteExactInputSingle is NOT a view — use .staticCall() to simulate it.
-
-const QUOTER_V2_ABI = [
-  "function quoteExactInputSingle((address tokenIn, address tokenOut, uint256 amountIn, uint24 fee, uint160 sqrtPriceLimitX96) params) external returns (uint256 amountOut, uint160 sqrtPriceX96After, uint32 initializedTicksCrossed, uint256 gasEstimate)",
-];
-
-// ─── Uniswap V3 Factory ABI ────────────────────────────────────────────────────
-
-const FACTORY_ABI = [
-  "function getPool(address tokenA, address tokenB, uint24 fee) external view returns (address pool)",
-];
-
-// ─── Minimal ERC-20 ABI (for resolving unknown addresses) ─────────────────────
-
-const ERC20_META_ABI = [
-  "function symbol() external view returns (string)",
-  "function decimals() external view returns (uint8)",
-];
-
-// ─── Canonical token registry (Ethereum mainnet) ──────────────────────────────
-// ETH is treated as WETH for quoting purposes.
-
-interface TokenDef {
-  address: string;
-  decimals: number;
-  isStablecoin?: boolean;
-}
-
-const SYMBOL_TO_TOKEN: Record<string, TokenDef> = {
-  ETH: { address: "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2", decimals: 18 },
-  WETH: { address: "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2", decimals: 18 },
-  USDC: {
-    address: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
-    decimals: 6,
-    isStablecoin: true,
-  },
-  USDT: {
-    address: "0xdAC17F958D2ee523a2206206994597C13D831ec7",
-    decimals: 6,
-    isStablecoin: true,
-  },
-  DAI: {
-    address: "0x6B175474E89094C44Da98b954EedeAC495271d0F",
-    decimals: 18,
-    isStablecoin: true,
-  },
-  WBTC: { address: "0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599", decimals: 8 },
-  LINK: { address: "0x514910771AF9Ca656af840dff83E8264EcF986CA", decimals: 18 },
-  UNI: { address: "0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984", decimals: 18 },
-  AAVE: { address: "0x7Fc66500c84A76Ad7e9c93437bFc5Ac33E2DDaE9", decimals: 18 },
-  MKR: { address: "0x9f8F72aA9304c8B593d555F12eF6589cC3A579A2", decimals: 18 },
-  CRV: { address: "0xD533a949740bb3306d119CC777fa900bA034cd52", decimals: 18 },
-};
-
-// Reverse lookup: address (lower-case) → symbol
-const ADDRESS_TO_SYMBOL: Record<string, string> = Object.fromEntries(
-  Object.entries(SYMBOL_TO_TOKEN).map(([sym, def]) => [
-    def.address.toLowerCase(),
-    sym,
-  ]),
-);
-
-// These are defined as explicit consts (not indexed from the map) to guarantee
-// non-undefined types even when noUncheckedIndexedAccess is enabled.
-const USDC_DEF: TokenDef = {
-  address: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
-  decimals: 6,
-  isStablecoin: true,
-};
-const WETH_DEF: TokenDef = {
-  address: "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
-  decimals: 18,
-};
-const FEE_TIERS = [500, 3000, 10_000] as const;
-const MIN_POOL_LIQUIDITY_USD = 10_000; // skip pools with less than $10k virtual liquidity
-
-// ─── Uniswap Trading API response types ──────────────────────────────────────
-
-interface UniswapAPIRoutePool {
-  type: string;
-  address: string;
-  tokenIn: { address: string; chainId: number; decimals: string; symbol: string };
-  tokenOut: { address: string; chainId: number; decimals: string; symbol: string };
-  fee: string;
-  sqrtRatioX96: string;
-  liquidity: string;
-  tick: number;
-  amountIn?: string;
-  amountOut?: string;
-}
-
-interface UniswapAPIQuoteResponse {
-  routing?: string;
-  quote?: {
-    chainId: number;
-    input: { token: { address: string; decimals: number; symbol: string }; amount: string };
-    output: { token: { address: string; decimals: number; symbol: string }; amount: string };
-    route: UniswapAPIRoutePool[][];
-  };
-  errorCode?: string;
-  detail?: string;
-}
-
-// ─── Token pairs to quote via Uniswap Trading API ────────────────────────────
-
-interface QueryPair {
-  tokenIn: { address: string; symbol: string; name: string; decimals: number };
-  tokenOut: { address: string; symbol: string; name: string; decimals: number };
-  /** Amount of tokenIn in smallest units (wei) */
-  amountIn: string;
-  priceLabel: string;
-}
-
-/** Placeholder EOA used as swapper for quote-only calls — not executing any swap */
-const QUOTE_SWAPPER_ADDRESS = "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045";
-
-const QUERY_PAIRS: QueryPair[] = [
-  {
-    tokenIn:  { address: "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2", symbol: "WETH",  name: "Wrapped Ether",   decimals: 18 },
-    tokenOut: { address: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", symbol: "USDC",  name: "USD Coin",        decimals: 6  },
-    amountIn: "1000000000000000000", // 1 WETH
-    priceLabel: "USDC per WETH",
-  },
-  {
-    tokenIn:  { address: "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2", symbol: "WETH",  name: "Wrapped Ether",   decimals: 18 },
-    tokenOut: { address: "0xdAC17F958D2ee523a2206206994597C13D831ec7", symbol: "USDT",  name: "Tether USD",       decimals: 6  },
-    amountIn: "1000000000000000000", // 1 WETH
-    priceLabel: "USDT per WETH",
-  },
-  {
-    tokenIn:  { address: "0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599", symbol: "WBTC",  name: "Wrapped Bitcoin",  decimals: 8  },
-    tokenOut: { address: "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2", symbol: "WETH",  name: "Wrapped Ether",   decimals: 18 },
-    amountIn: "10000000", // 0.1 WBTC
-    priceLabel: "WETH per WBTC",
-  },
-  {
-    tokenIn:  { address: "0x514910771AF9Ca656af840dff83E8264EcF986CA", symbol: "LINK",  name: "Chainlink",        decimals: 18 },
-    tokenOut: { address: "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2", symbol: "WETH",  name: "Wrapped Ether",   decimals: 18 },
-    amountIn: "10000000000000000000", // 10 LINK
-    priceLabel: "WETH per LINK",
-  },
-  {
-    tokenIn:  { address: "0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984", symbol: "UNI",   name: "Uniswap",          decimals: 18 },
-    tokenOut: { address: "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2", symbol: "WETH",  name: "Wrapped Ether",   decimals: 18 },
-    amountIn: "10000000000000000000", // 10 UNI
-    priceLabel: "WETH per UNI",
-  },
-  {
-    tokenIn:  { address: "0x6B175474E89094C44Da98b954EedeAC495271d0F", symbol: "DAI",   name: "Dai Stablecoin",   decimals: 18 },
-    tokenOut: { address: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", symbol: "USDC",  name: "USD Coin",         decimals: 6  },
-    amountIn: "100000000000000000000", // 100 DAI
-    priceLabel: "USDC per DAI",
-  },
-]
-
-
-// ─── CoinGecko ID map (symbol → CoinGecko coin id) ───────────────────────────
-
-const SYMBOL_TO_COINGECKO_ID: Record<string, string> = {
-  ETH: "ethereum",
-  WETH: "ethereum",
-  BTC: "bitcoin",
-  WBTC: "wrapped-bitcoin",
-  USDC: "usd-coin",
-  USDT: "tether",
-  DAI: "dai",
-  LINK: "chainlink",
-  UNI: "uniswap",
-  AAVE: "aave",
-  MKR: "maker",
-  CRV: "curve-dao-token",
-};
-
-// ─── CoinGecko market data interface ─────────────────────────────────────────
-
-export interface CoinGeckoMarketData {
-  symbol: string;
-  price_usd: number;
-  volume_24h_usd: number;
-  price_change_24h_pct: number;
-  market_cap_usd: number;
-}
-
-// ─── Price-fetching output contract ───────────────────────────────────────────
-
-export interface TokenPriceResult {
-  /** Original symbol or checksummed address as provided by the caller */
-  symbol: string;
-  /** Resolved Ethereum mainnet ERC-20 address (42-char hex) */
-  address: string;
-  /** USD price derived from on-chain Uniswap data; null if unresolvable */
-  price_usd: number | null;
-  source: "uniswap";
-  /** Pair route used: "TOKEN/USDC" | "TOKEN/WETH" | "NONE" */
-  liquidity_used: string;
-  /** 24h trading volume in USD across all exchanges (CoinGecko) */
-  volume_24h_usd?: number | null;
-  /** 24h price change percentage (CoinGecko) */
-  price_change_24h_pct?: number | null;
-  /** Market capitalisation in USD (CoinGecko) */
-  market_cap_usd?: number | null;
-}
-
-export interface PriceQuoteResponse {
-  data: TokenPriceResult[];
-}
-
-// ─── On-chain pool snapshot ────────────────────────────────────────────────────
-
-interface PoolSnapshot {
-  address: string;
-  token0Symbol: string;
-  token0Address?: string;
-  token1Symbol: string;
-  token1Address?: string;
-  feePct: number;
-  priceLabel: string;
-  currentPrice: number;
-  /** virtual token1 amount at current tick — proxy for in-range liquidity */
-  virtualToken1: number;
-  /** pre-computed USD value of in-range liquidity — use this directly, do not re-estimate */
-  liquidityUSD: number;
-  liquidityRaw: string;
-  tick: number;
-}
-
-// ─── System prompt ─────────────────────────────────────────────────────────────
-
-const SYSTEM_PROMPT = `You are the Research agent in a Uniswap trading swarm.
-You receive live on-chain Uniswap V3 pool data and a trading plan, then you
-produce a structured research report identifying the best candidate token pairs.
-
-Pool data fields explained:
-- currentPrice: human-readable price (see priceLabel for the pair direction)
-- liquidityUSD: pre-computed total USD value of in-range liquidity — use this field directly
-- virtualToken1: virtual in-range liquidity in token1 units (for reference)
-- feePct: pool fee as a percentage (e.g., 0.05 = 0.05%)
-
-Rules:
-- Use the provided liquidityUSD value directly — do NOT re-estimate or recalculate it
-- Only include candidates where liquidityUSD meets the minLiquidityUSD constraint
-- Score candidates based on liquidityUSD depth and fee competitiveness
-- Use currentPrice as priceUSD for the non-WETH/non-stablecoin token in the pair
-- CRITICAL: The "address" field MUST be the full 42-character hex address (0x...) of the ERC-20 token
-  Use token0Address or token1Address from the pool data — NEVER use a symbol like "WETH" as the address
-- Output ONLY valid JSON matching the ResearchReport schema
-- Never fabricate — use only the on-chain data provided
-
-Schema:
-{
-  "timestamp": number,
-  "marketSummary": "<2–3 sentence market overview>",
-  "candidates": [
-    {
-      "address": "<token address (non-WETH/stablecoin token in the pair)>",
-      "symbol": "<token symbol>",
-      "name": "<token name>",
-      "pairAddress": "<pool address>",
-      "baseToken": "<WETH|USDC|USDT>",
-      "priceUSD": number,
-      "liquidityUSD": number,
-      "volume24hUSD": number,
-      "priceChange24hPct": number,
-      "poolFeeTier": number,
-      "txCount": number
-    }
-  ],
-  "dataSource": "uniswap-v3-onchain"
-}`;
-
-// ─── ResearchAgent ─────────────────────────────────────────────────────────────
+export type { TokenPriceResult, PriceQuoteResponse, CoinGeckoMarketData };
 
 export class ResearchAgent {
   static readonly MEMORY_KEY = "researcher/report";
@@ -297,6 +49,8 @@ export class ResearchAgent {
 
   private readonly compute: ZGCompute;
   private readonly memory: BlackboardMemory;
+  /** Spoofs Chrome TLS fingerprint + browser headers to bypass bot-detection (Reddit, etc.) */
+  private readonly browser = new Impit({ browser: "chrome" });
 
   // ── Price-cache (15-second TTL to avoid redundant RPC/quote calls) ──────────
   private readonly CACHE_TTL_MS = 15_000;
@@ -329,13 +83,25 @@ export class ResearchAgent {
    * The Planner then reads this report via contextFor() and uses it to plan.
    */
   async run(goal: string, opts: InferOptions = {}): Promise<ResearchReport> {
-    logger.info(`[Researcher] Fetching Uniswap V3 pool data via Uniswap Trading API…`);
+    logger.info(
+      `[Researcher] Fetching Uniswap V3 pool data via Uniswap Trading API…`,
+    );
 
-    const [pools, marketData] = await Promise.all([
+    // Fetch pools, CoinGecko base data, and narrative signal all in parallel
+    const [pools, narrativeSignal] = await Promise.all([
       this.fetchOnChainPools(),
-      this.fetchCoinGeckoMarketData(Object.keys(SYMBOL_TO_COINGECKO_ID)),
+      this.fetchNarrativeSignal(),
     ]);
-    logger.info(`[Researcher] Fetched ${pools.length} pools from chain`);
+    logger.info(
+      `[Researcher] Fetched ${pools.length} pools | narrative=${narrativeSignal.narrative} fearGreed=${narrativeSignal.fearGreedValue} trending=[${narrativeSignal.trendingTokens.join(",")}]`,
+    );
+
+    // Fetch market data for base symbols + narrative-relevant extras
+    const allSymbols = [
+      ...Object.keys(SYMBOL_TO_COINGECKO_ID),
+      ...narrativeSignal.extraSymbols,
+    ];
+    const marketData = await this.fetchCoinGeckoMarketData(allSymbols);
 
     const cfg = getConfig();
     const context = this.memory.contextFor(ResearchAgent.MEMORY_KEY);
@@ -345,16 +111,31 @@ export class ResearchAgent {
     if (marketData.size > 0) {
       const lines = Array.from(marketData.entries()).map(
         ([sym, d]) =>
-          `${sym}: price=$${d.price_usd.toFixed(4)} vol24h=$${(d.volume_24h_usd / 1e6).toFixed(1)}M chg24h=${d.price_change_24h_pct.toFixed(2)}% mcap=$${(d.market_cap_usd / 1e9).toFixed(2)}B`,
+          `${sym}: price=$${(d.price_usd ?? 0).toFixed(4)} vol24h=$${((d.volume_24h_usd ?? 0) / 1e6).toFixed(1)}M chg24h=${(d.price_change_24h_pct ?? 0).toFixed(2)}% mcap=$${((d.market_cap_usd ?? 0) / 1e9).toFixed(2)}B`,
       );
       marketDataText = `\nLive CoinGecko market data (24h):\n${lines.join("\n")}`;
     }
 
+    // Build narrative signal section for LLM context
+    const narrativeText = [
+      `Market Sentiment (Fear & Greed Index): ${narrativeSignal.fearGreedValue}/100 — "${narrativeSignal.fearGreedLabel}"`,
+      `Detected Narrative: ${narrativeSignal.narrative}`,
+      narrativeSignal.trendingTokens.length > 0
+        ? `CoinGecko Trending Tokens (right now): ${narrativeSignal.trendingTokens.join(", ")}`
+        : null,
+      narrativeSignal.topHeadlines.length > 0
+        ? `Recent News & Community Headlines:\n${narrativeSignal.topHeadlines.map((h) => `  • ${h}`).join("\n")}`
+        : null,
+    ]
+      .filter(Boolean)
+      .join("\n");
+
     const userPrompt = [
       `Trading goal: ${goal}`,
       `Default constraints: maxSlippage=${cfg.MAX_SLIPPAGE_PCT}%, maxPosition=$${cfg.MAX_POSITION_USDC} USDC, minLiquidity=$${cfg.MIN_LIQUIDITY_USD.toLocaleString()}`,
-      `Live Uniswap V3 on-chain pool snapshots:\n${JSON.stringify(pools, null, 2)}`,
+      `Live Uniswap multi-protocol pool data (V2/V3/V4/UniswapX) — each entry has a pre-computed \`tokenAddress\` — use it directly as the candidate \`address\` field:\n${JSON.stringify(pools, null, 2)}`,
       marketDataText,
+      `\nReal-time narrative signal:\n${narrativeText}`,
       context,
     ]
       .filter(Boolean)
@@ -367,7 +148,7 @@ export class ResearchAgent {
     );
 
     report.timestamp = Date.now();
-    report.dataSource = "uniswap-v3-onchain";
+    report.dataSource = "uniswap-multi-protocol";
 
     // Enrich candidates with CoinGecko volume + price change data
     for (const candidate of report.candidates as TokenCandidate[]) {
@@ -431,7 +212,7 @@ export class ResearchAgent {
               amount: pair.amountIn,
               swapper: QUOTE_SWAPPER_ADDRESS,
               slippageTolerance: 0.5,
-              protocols: ["V3"],
+              protocols: ["V2", "V3", "V4", "UNISWAPX_V2"],
             }),
           });
 
@@ -457,7 +238,8 @@ export class ResearchAgent {
           const firstPath = data.quote.route[0];
           if (!firstPath || firstPath.length === 0) return;
           const pool = firstPath[0]!;
-          if (pool.type !== "v3-pool") return;
+          // Accept v2-pool, v3-pool, v4-pool — skip mixed/unknown types
+          if (!pool.type.endsWith("-pool")) return;
 
           const inputAmt = Number(data.quote.input.amount);
           const outputAmt = Number(data.quote.output.amount);
@@ -468,38 +250,53 @@ export class ResearchAgent {
             10 ** pair.tokenOut.decimals /
             (inputAmt / 10 ** pair.tokenIn.decimals);
 
-          // Determine canonical token0/token1 by address order (lower = token0 in V3)
-          const inLow  = pair.tokenIn.address.toLowerCase();
+          // Determine which side is token0 (lower address) — needed for sqrtPrice direction
+          const inLow = pair.tokenIn.address.toLowerCase();
           const outLow = pair.tokenOut.address.toLowerCase();
-          const [t0, t1] =
+          const [, t1] =
             inLow < outLow
               ? [pair.tokenIn, pair.tokenOut]
               : [pair.tokenOut, pair.tokenIn];
 
           // virtualToken1 ≈ L × sqrtPrice / 2^96 (in token1 human units)
+          // V2 pools don't have sqrtRatioX96/liquidity — fall back to 0
+          const sqrtRaw = pool.sqrtRatioX96 ?? "0";
+          const liquidityRaw = pool.liquidity ?? "0";
           const sqrtPriceNum =
-            Number(BigInt(pool.sqrtRatioX96)) / Number(2n ** 96n);
-          const virtualToken1Raw = Number(BigInt(pool.liquidity)) * sqrtPriceNum;
+            sqrtRaw !== "0" ? Number(BigInt(sqrtRaw)) / Number(2n ** 96n) : 0;
+          const virtualToken1Raw =
+            liquidityRaw !== "0"
+              ? Number(BigInt(liquidityRaw)) * sqrtPriceNum
+              : 0;
           const virtualToken1 = virtualToken1Raw / 10 ** t1.decimals;
 
+          // Identify which token is the trade token vs the base token.
+          // The base is whichever side is WETH, USDC, USDT, or DAI.
+          const BASE_SYMBOLS = new Set(["WETH", "USDC", "USDT", "DAI"]);
+          const isInBase = BASE_SYMBOLS.has(pair.tokenIn.symbol);
+          const tradeTok = isInBase ? pair.tokenOut : pair.tokenIn;
+          const baseTok = isInBase ? pair.tokenIn : pair.tokenOut;
+
           snapshots.push({
-            address: pool.address,
-            token0Symbol:  t0.symbol,
-            token0Address: t0.address,
-            token1Symbol:  t1.symbol,
-            token1Address: t1.address,
-            feePct:       parseInt(pool.fee, 10) / 10_000,
-            priceLabel:   pair.priceLabel,
+            poolAddress: pool.address,
+            tokenAddress: tradeTok.address,
+            tokenSymbol: tradeTok.symbol,
+            tokenName: tradeTok.name,
+            baseTokenSymbol: baseTok.symbol,
+            baseTokenAddress: baseTok.address,
+            protocol: pool.type,
+            feePct: parseInt(pool.fee || "0", 10) / 10_000,
+            priceLabel: pair.priceLabel,
             currentPrice: Number(currentPrice.toFixed(6)),
             virtualToken1: Number(virtualToken1.toFixed(4)),
-            liquidityUSD:  0, // filled in post-processing below
-            liquidityRaw:  pool.liquidity,
-            tick:          pool.tick,
+            liquidityUSD: 0, // filled in post-processing below
+            liquidityRaw: liquidityRaw,
+            tick: pool.tick ?? 0,
           });
 
           logger.debug(
             `[Researcher] ${pair.priceLabel}: ${currentPrice.toFixed(4)} ` +
-              `(pool ${pool.address}, fee ${pool.fee})`,
+              `(${pool.type} ${pool.address}, fee ${pool.fee})`,
           );
         } catch (err: unknown) {
           const msg = err instanceof Error ? err.message : String(err);
@@ -519,40 +316,37 @@ export class ResearchAgent {
     let wethUSD = 0;
     for (const s of snapshots) {
       if (
-        (s.token0Symbol === "WETH" && stableSymbols.has(s.token1Symbol)) ||
-        (s.token1Symbol === "WETH" && stableSymbols.has(s.token0Symbol))
+        (s.tokenSymbol === "WETH" && stableSymbols.has(s.baseTokenSymbol)) ||
+        (s.baseTokenSymbol === "WETH" && stableSymbols.has(s.tokenSymbol))
       ) {
-        // currentPrice is stable-per-WETH (e.g. 3200 USDC/WETH) or WETH-per-stable
-        if (stableSymbols.has(s.token1Symbol)) {
-          // price = token1(stable) per token0(WETH) → WETH price = currentPrice
+        if (stableSymbols.has(s.baseTokenSymbol)) {
           wethUSD = s.currentPrice;
         } else {
-          // price = WETH per stable → WETH price = 1 / currentPrice
           wethUSD = 1 / s.currentPrice;
         }
         if (wethUSD > 100 && wethUSD < 1_000_000) break; // sanity
       }
     }
     if (wethUSD === 0) wethUSD = 3_000; // safe fallback if no WETH/stable pair fetched
-    logger.debug(`[Researcher] WETH/USD reference price: $${wethUSD.toFixed(2)}`);
+    logger.debug(
+      `[Researcher] WETH/USD reference price: $${wethUSD.toFixed(2)}`,
+    );
 
     for (const s of snapshots) {
-      // virtualToken1 is in t1 human units. Compute USD value of the t1 side, double for t0.
-      const t1Symbol = s.token1Symbol;
-      let t1PriceUSD: number;
-      if (stableSymbols.has(t1Symbol)) {
-        t1PriceUSD = 1; // USDC / USDT / DAI ≈ $1
-      } else if (t1Symbol === "WETH") {
-        t1PriceUSD = wethUSD;
+      // virtualToken1 is in baseToken human units. Price the base side, double for both sides.
+      const baseSymbol = s.baseTokenSymbol;
+      let basePriceUSD: number;
+      if (stableSymbols.has(baseSymbol)) {
+        basePriceUSD = 1; // USDC / USDT / DAI ≈ $1
+      } else if (baseSymbol === "WETH") {
+        basePriceUSD = wethUSD;
       } else {
-        t1PriceUSD = 0; // unknown — skip
+        basePriceUSD = 0; // unknown — skip
       }
       s.liquidityUSD =
-        t1PriceUSD > 0
-          ? Math.round(s.virtualToken1 * t1PriceUSD * 2)
-          : 0;
+        basePriceUSD > 0 ? Math.round(s.virtualToken1 * basePriceUSD * 2) : 0;
       logger.debug(
-        `[Researcher] ${s.token0Symbol}/${s.token1Symbol} liquidityUSD=$${s.liquidityUSD.toLocaleString()}`,
+        `[Researcher] ${s.tokenSymbol}/${s.baseTokenSymbol} (${s.protocol}) liquidityUSD=$${s.liquidityUSD.toLocaleString()}`,
       );
     }
 
@@ -568,6 +362,166 @@ export class ResearchAgent {
     }
 
     return snapshots;
+  }
+
+  // ── Narrative signal: Reddit + CoinTelegraph RSS + CoinGecko trending + Fear&Greed ──
+
+  /**
+   * Aggregates market sentiment from four free external sources:
+   *  1. Alternative.me Fear & Greed index
+   *  2. CoinGecko /search/trending
+   *  3. Reddit r/CryptoCurrency hot posts
+   *  4. CoinTelegraph RSS feed
+   *
+   * Detects the dominant narrative from combined headlines, builds extra symbol list.
+   */
+  private async fetchNarrativeSignal(): Promise<NarrativeSignal> {
+    const [fearGreed, trending, redditTitles, newsTitles] = await Promise.all([
+      this.fetchFearGreed(),
+      this.fetchCoinGeckoTrending(),
+      this.fetchRedditPosts(),
+      this.fetchCoinTelegraphRSS(),
+    ]);
+
+    const allTitles = [...redditTitles, ...newsTitles];
+    const lowered = allTitles.map((t) => t.toLowerCase());
+
+    // Score each narrative by counting keyword hits across all headlines
+    const scores: Record<string, number> = {};
+    for (const [name, keywords] of Object.entries(NARRATIVE_KEYWORDS)) {
+      if (name === "neutral") continue;
+      scores[name] = lowered.reduce((acc, title) => {
+        const hits = keywords.filter((kw) => title.includes(kw)).length;
+        return acc + hits;
+      }, 0);
+    }
+
+    // Override to safe_haven when fear is extreme regardless of headline scores
+    let winnerNarrative: NarrativeType = "neutral";
+    if (fearGreed.score < 25) {
+      winnerNarrative = "safe_haven";
+    } else {
+      const [topName, topScore] = Object.entries(scores).sort(
+        ([, a], [, b]) => b - a,
+      )[0] ?? ["neutral", 0];
+      if (topScore > 0) winnerNarrative = topName as NarrativeType;
+    }
+
+    // Collect the top 5 headlines matching the winning narrative keywords
+    const matchingKws = NARRATIVE_KEYWORDS[winnerNarrative] ?? [];
+    const topHeadlines = allTitles
+      .filter((t) => matchingKws.some((kw) => t.toLowerCase().includes(kw)))
+      .slice(0, 5);
+    const finalHeadlines =
+      topHeadlines.length > 0 ? topHeadlines : allTitles.slice(0, 5);
+
+    return {
+      narrative: winnerNarrative,
+      score: scores[winnerNarrative] ?? 0,
+      topHeadlines: finalHeadlines,
+      trendingTokens: trending,
+      fearGreedValue: fearGreed.score,
+      fearGreedLabel: fearGreed.label,
+      extraSymbols: NARRATIVE_EXTRA_SYMBOLS[winnerNarrative] ?? [],
+    };
+  }
+
+  /** GET https://api.alternative.me/fng/ — zero auth required */
+  private async fetchFearGreed(): Promise<{ score: number; label: string }> {
+    try {
+      const res = await this.browser.fetch(
+        "https://api.alternative.me/fng/?limit=1",
+      );
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const json = (await res.json()) as {
+        data?: Array<{ value: string; value_classification: string }>;
+      };
+      const item = json.data?.[0];
+      return item
+        ? { score: Number(item.value), label: item.value_classification }
+        : { score: 50, label: "Neutral" };
+    } catch (err) {
+      logger.warn(`[Researcher] fetchFearGreed failed: ${err}`);
+      return { score: 50, label: "Neutral" };
+    }
+  }
+
+  /** GET /search/trending — returns top 7 trending symbols from CoinGecko */
+  private async fetchCoinGeckoTrending(): Promise<string[]> {
+    try {
+      const url = `${COINGECKO_API_BASE_URL}/search/trending`;
+      const { COINGECKO_API_KEY } = getConfig();
+      const headers: Record<string, string> = { Accept: "application/json" };
+      if (COINGECKO_API_KEY) headers["x-cg-demo-api-key"] = COINGECKO_API_KEY;
+
+      const res = await this.browser.fetch(url, { headers });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const json = (await res.json()) as {
+        coins?: Array<{ item: { symbol: string } }>;
+      };
+      return (json.coins ?? [])
+        .slice(0, 7)
+        .map((c) => c.item.symbol.toUpperCase());
+    } catch (err) {
+      logger.warn(`[Researcher] fetchCoinGeckoTrending failed: ${err}`);
+      return [];
+    }
+  }
+
+  /** GET https://www.reddit.com/r/CryptoCurrency/hot.rss — JSON API is blocked; RSS is open */
+  private async fetchRedditPosts(): Promise<string[]> {
+    try {
+      const res = await this.browser.fetch(
+        "https://www.reddit.com/r/CryptoCurrency/hot.rss?limit=25",
+        { headers: { Accept: "application/rss+xml, application/xml" } },
+      );
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const xml = await res.text();
+      const titles = [...xml.matchAll(/<title>([^<]{10,300})<\/title>/g)]
+        .map((m) =>
+          (m[1] ?? "")
+            .trim()
+            .replace(/&amp;/g, "&")
+            .replace(/&lt;/g, "<")
+            .replace(/&gt;/g, ">"),
+        )
+        .filter(Boolean)
+        .slice(1, 21);
+      return titles;
+    } catch (err) {
+      logger.warn(`[Researcher] fetchRedditPosts failed: ${err}`);
+      return [];
+    }
+  }
+
+  /** GET https://cointelegraph.com/rss — parse <title> tags from XML */
+  private async fetchCoinTelegraphRSS(): Promise<string[]> {
+    try {
+      const res = await this.browser.fetch("https://cointelegraph.com/rss", {
+        headers: { Accept: "application/rss+xml, application/xml, text/xml" },
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const xml = await res.text();
+      // CDATA-wrapped titles (most CT articles)
+      const cdataRe = /<title><!\[CDATA\[(.+?)\]\]><\/title>/gs;
+      const cdataMatches = [...xml.matchAll(cdataRe)];
+      if (cdataMatches.length > 0) {
+        return cdataMatches
+          .map((m) => (m[1] ?? "").trim())
+          .filter(Boolean)
+          .slice(1, 21);
+      }
+      // Fallback: plain <title>…</title>
+      const plainRe = /<title>([^<]{3,200})<\/title>/g;
+      const plain = [...xml.matchAll(plainRe)];
+      return plain
+        .map((m) => (m[1] ?? "").trim())
+        .filter(Boolean)
+        .slice(1, 21);
+    } catch (err) {
+      logger.warn(`[Researcher] fetchCoinTelegraphRSS failed: ${err}`);
+      return [];
+    }
   }
 
   // ── Public: fetch market data (volume, price change, mcap) from CoinGecko ───

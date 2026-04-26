@@ -11,6 +11,11 @@ IMPORTANT: The Researcher agent has already run and saved on-chain market data
 to shared memory. You will receive it below. Use it to tailor the plan
 to current market conditions — e.g. choose strategy type based on real pool data.
 
+Protocol context:
+- The swarm routes via the Uniswap Trading API which covers V2, V3, V4, AND UniswapX automatically
+- Do NOT hardcode "V3" in plans — say "Uniswap" or "Uniswap multi-protocol" instead
+- The \`protocol\` field in research candidates shows which version was actually routed
+
 Rules:
 - Always define a clear strategy type from: arbitrage, momentum, lp_rotation
 - Set concrete, conservative constraints — protect capital above all else

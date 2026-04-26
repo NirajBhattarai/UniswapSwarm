@@ -161,7 +161,9 @@ export class ZGCompute {
     const rounded = Math.floor(deposit * 1e6) / 1e6;
 
     if (rounded <= 0) {
-      logger.info(`[Compute] Ledger topped up ✓ (~${ledgerBalance.toFixed(4)} OG)`);
+      logger.info(
+        `[Compute] Ledger topped up ✓ (~${ledgerBalance.toFixed(4)} OG)`,
+      );
       return;
     }
 
