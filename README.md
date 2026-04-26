@@ -1,8 +1,8 @@
 # UniswapSwarm
 
-An autonomous AI agent swarm that identifies and executes profitable, low-risk token swaps across **Uniswap V2/V3/V4 and UniswapX** (Ethereum mainnet). Built on top of the **0G Compute Network** for verifiable, decentralised LLM inference and **0G Storage** for on-chain audit trails.
+An autonomous AI agent swarm that identifies and executes profitable, low-risk token swaps across **Uniswap V2/V3/V4 and UniswapX** (Ethereum mainnet). Built on top of the **0G Compute Network** for verifiable, decentralised LLM inference and **0G Storage** for on-chain audit trails, with a **CopilotKit + AG-UI / A2A** front-end for live, multi-agent observability and HITL approval.
 
-> **Capital preservation first.** The swarm is tuned to prioritise safety over yield — every trade is researched, planned, risk-scored, strategised, and critiqued before execution.
+> **Capital preservation first.** The swarm is tuned to prioritise safety over yield — every trade is researched, planned, risk-scored, strategised, and critiqued before execution. Stablecoin-to-stablecoin swaps (USDC ↔ USDT, DAI ↔ USDC, …) are categorically forbidden by policy at three independent layers.
 
 ---
 
@@ -13,6 +13,8 @@ The swarm runs a sequential pipeline of specialised agents that share a common *
 ```
 Researcher → Planner → Risk → Strategy → Critic → Executor
 ```
+
+Each agent is wrapped in its own **A2A (Agent-to-Agent) JSON-RPC server**. The Next.js cockpit talks to those servers through a Gemini-backed orchestrator and renders the call graph live in the browser as animated handoff cards.
 
 | Agent          | Package            | Role                                                                                                                                                                |
 | -------------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -34,7 +36,22 @@ All agent outputs are persisted via `@swarm/memory` (`ZGStorage`) to the [0G Sto
 ```
 uniswapswarm/
 ├── apps/
-│   └── orchestrator/       # Express REST server + cycle runner
+│   ├── orchestrator/                 # Express REST server + cycle runner +
+│   │   └── src/
+│   │       ├── a2aAgents.ts          #   six standalone A2A JSON-RPC servers
+│   │       ├── a2aOrchestrator.ts    #   AG-UI orchestrator wiring
+│   │       ├── orchestrator.ts       #   sequential pipeline runner
+│   │       └── server.ts             #   REST + SSE endpoints
+│   └── web/                          # Next.js + CopilotKit cockpit
+│       ├── app/                      #   App Router pages + /api/copilotkit
+│       ├── components/
+│       │   ├── a2a/                  #     animated MessageToA2A / FromA2A cards
+│       │   ├── data/                 #     sidebar cards (plan, risk, strategy, audit)
+│       │   ├── forms/                #     HITL: SwapIntentForm
+│       │   ├── hitl/                 #     HITL: TradeApprovalCard
+│       │   ├── swarm-audit-context.tsx  #   0G storage write fan-in
+│       │   └── swarm-chat.tsx        #     CopilotKit actions + chat shell
+│       └── lib/                      #   wallet watch, SSE plumbing, agent registry
 ├── agents/
 │   ├── agent-researcher/   # Uniswap Trading API, CoinGecko, Fear&Greed, narrative detection
 │   ├── agent-planner/
@@ -45,7 +62,7 @@ uniswapswarm/
 ├── packages/
 │   ├── compute/            # ZGCompute — 0G Compute Network client
 │   ├── memory/             # BlackboardMemory + ZGStorage — shared agent state & on-chain audit
-│   ├── shared/             # Config (Zod-validated), types, logger, constants
+│   ├── shared/             # Config (Zod-validated), types, logger, constants, stablecoin set
 │   ├── eslint-config/
 │   └── typescript-config/
 └── scripts/
@@ -58,11 +75,12 @@ Built with [Turborepo](https://turbo.build/) and [pnpm workspaces](https://pnpm.
 
 ## Prerequisites
 
-| Tool               | Version                           |
-| ------------------ | --------------------------------- |
-| Node.js            | ≥ 18                              |
-| pnpm               | ≥ 9                               |
-| A funded 0G wallet | See [0G docs](https://docs.0g.ai) |
+| Tool                  | Version                                                                            |
+| --------------------- | ---------------------------------------------------------------------------------- |
+| Node.js               | ≥ 18                                                                               |
+| pnpm                  | ≥ 9                                                                                |
+| A funded 0G wallet    | See [0G docs](https://docs.0g.ai)                                                  |
+| Google Gemini API key | For the cockpit orchestrator. [Get a key](https://aistudio.google.com/app/apikey). |
 
 ---
 
@@ -103,6 +121,24 @@ cp .env.example .env
 | `DRY_RUN`              | no       | `true` to simulate swaps without submitting on-chain (default: `true`)           |
 | `CYCLE_INTERVAL_MS`    | no       | Milliseconds between autonomous cycles (default: `300000` = 5 min)               |
 | `PORT`                 | no       | REST server port (default: `4000`)                                               |
+
+#### CopilotKit cockpit / A2A integration
+
+| Variable                             | Required        | Description                                                                                               |
+| ------------------------------------ | --------------- | --------------------------------------------------------------------------------------------------------- |
+| `GOOGLE_GENERATIVE_AI_API_KEY`       | **for web app** | Gemini API key. Aliases `GOOGLE_API_KEY` and `GEMINI_API_KEY` are also accepted as fallbacks.             |
+| `COPILOTKIT_MODEL`                   | no              | Gemini model used by the orchestrator (default: `gemini-2.5-flash`).                                      |
+| `NEXT_PUBLIC_COPILOTKIT_RUNTIME_URL` | no              | Frontend → CopilotKit runtime URL (default: `/api/copilotkit`).                                           |
+| `NEXT_PUBLIC_ORCHESTRATOR_URL`       | no              | Frontend → orchestrator REST/A2A base URL (default: `http://localhost:4000`).                             |
+| `A2A_PUBLIC_BASE_URL`                | no              | Public URL embedded in agent cards. Defaults to `http://localhost:${PORT}`.                               |
+| `A2A_HOST`, `A2A_PUBLIC_HOST`        | no              | Bind address + public hostname for the six A2A servers. Useful when deploying remotely.                   |
+| `RESEARCHER_PORT`                    | no              | Port for the standalone Researcher A2A server (default: `4101`).                                          |
+| `PLANNER_PORT`                       | no              | Port for the standalone Planner A2A server (default: `4102`).                                             |
+| `RISK_PORT`                          | no              | Port for the standalone Risk A2A server (default: `4103`).                                                |
+| `STRATEGY_PORT`                      | no              | Port for the standalone Strategy A2A server (default: `4104`).                                            |
+| `CRITIC_PORT`                        | no              | Port for the standalone Critic A2A server (default: `4105`).                                              |
+| `EXECUTOR_PORT`                      | no              | Port for the standalone Executor A2A server (default: `4106`).                                            |
+| `RESEARCHER_AGENT_URL`, …            | no              | Per-agent URL overrides for the web app when the A2A servers do not live on the same host as the cockpit. |
 
 ### 3. Fund the 0G Compute ledger
 
@@ -179,8 +215,8 @@ pnpm --filter orchestrator dev
 The `apps/web` Next.js app implements the same multi-agent UI pattern as
 [CopilotKit/a2a-travel](https://github.com/CopilotKit/a2a-travel), but tailored to
 the Uniswap swap pipeline. Each Uniswap Swarm agent is exposed as its own
-A2A server, and a `A2AMiddlewareAgent` wraps a Gemini-backed orchestration
-agent and auto-injects the `send_message_to_a2a_agent` tool.
+A2A JSON-RPC server, and a `A2AMiddlewareAgent` wraps a Gemini-backed
+orchestration agent and auto-injects the `send_message_to_a2a_agent` tool.
 
 ```
 apps/web (CopilotKit + AG-UI)
@@ -205,16 +241,34 @@ pnpm dev
 
 Then open http://localhost:3000.
 
-The UI ships with two HITL flows that mirror the trip-requirements / budget
-approval workflow from a2a-travel:
+#### What you see in the UI
 
-- `gather_swap_intent` — pre-trade form (token-in, token-out, USD size, risk level)
-- `request_trade_approval` — post-critic approval card before the executor signs
-
-Each `send_message_to_a2a_agent` call is rendered inline in the chat as a green
-"orchestrator → agent" card and a follow-up blue "agent → orchestrator"
-response card. Structured JSON returned by each agent is also extracted into
-the right-hand sidebar (Researcher candidates, Plan tasks, Risk verdicts, …).
+- **Animated A2A handoff cards.** Every `send_message_to_a2a_agent` call
+  renders as a green "orchestrator → agent" card with a flowing arrow,
+  pulsing badge, and bouncing ellipsis while the request is in flight,
+  followed by a blue "agent → orchestrator" response card sliding in from
+  the right when complete.
+- **0G Storage audit chips.** Each response card lists the keys the agent
+  wrote to 0G Storage along with truncated root hashes and byte sizes
+  (`risk/assessments → 0x8ad6…ba6d3 · 943 B`). The same data is aggregated
+  into a dedicated **Storage Audit Trail** card in the sidebar, fed via a
+  `SwarmAuditContext` that fan-ins writes from every streamed message.
+- **Sidebar data cards.** Structured JSON from each agent is parsed and
+  rendered as first-class cards: candidate list, plan tasks, per-token
+  risk score with severity-ranked flags, strategy proposal (route, fee
+  tier, slippage), critic verdict, and execution receipt.
+- **Defensive task rendering.** If the orchestrator LLM regresses and
+  pastes a previous agent's JSON envelope into the next `task`, the UI
+  detects the JSON shape and renders a compact "📎 Forwarded payload"
+  pill instead of dumping braces into the chat.
+- **Two HITL flows** mirroring the a2a-travel trip-requirements / budget
+  approval pattern:
+  - `gather_swap_intent` — pre-trade form (token-in, token-out, USD size,
+    risk level). Used **rarely** — only when the user opens the chat with
+    a bare greeting. Any actionable prompt ("find safe trades", "swap X
+    for Y") goes straight to the Researcher.
+  - `request_trade_approval` — post-critic approval card. The Executor
+    will not sign without an explicit user click here.
 
 Required environment variables (see `.env.example`):
 
@@ -257,22 +311,59 @@ Every agent writes its output to the shared `BlackboardMemory`. Each write is si
 
 ---
 
+## Safety Policies
+
+### Stablecoin → stablecoin swaps are forbidden
+
+The trade always starts from a USD-pegged token (typically USDC), so a
+stable `tokenOut` (USDT, DAI, FRAX, BUSD, FDUSD, PYUSD, USDe, USDS, …) is
+a 1:1 swap with no economic upside that only burns gas and slippage. The
+swarm enforces this at **three independent layers** so that even a buggy
+LLM completion cannot produce one:
+
+| Layer      | Where                                                                          | Behaviour                                                                                                                                                               |
+| ---------- | ------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Researcher | `agents/agent-researcher/src/core/prompts.ts` + `formatters/researchPrompt.ts` | System prompt forbids stablecoin candidates, post-LLM filter drops anything `isStablecoin({symbol, address})` returns true for.                                         |
+| Strategy   | `agents/agent-strategy/src/StrategyAgent.ts`                                   | Stablecoins are stripped from the candidate pool before the LLM sees it; if the LLM still emits a stable `tokenOut`, the agent forces the synthetic USDC→WETH fallback. |
+| Critic     | `agents/agent-critic/src/CriticAgent.ts`                                       | Hard veto: any proposal where both `tokenIn` and `tokenOut` are stablecoins is rejected with confidence=100.                                                            |
+
+The canonical stablecoin set lives in
+[`packages/shared/src/constants.ts`](./packages/shared/src/constants.ts)
+and is exposed as `STABLECOIN_SYMBOLS`, `STABLECOIN_ADDRESSES`, and
+`isStablecoin({ symbol, address })`.
+
+### Other built-in safeguards
+
+- `maxSlippagePct` is hard-clamped after LLM inference; the LLM cannot exceed the configured plan ceiling.
+- The Risk Agent emits typed `RiskFlag[]` with severity (`low | medium | high | critical`); any `critical` flag forces a Critic rejection.
+- The Executor's `SIMULATION_ONLY` flag is checked in addition to `DRY_RUN`, so signing requires both env vars to be explicitly set to `false`.
+
+---
+
 ## Development
 
 ```sh
 # Type-check all packages
 pnpm check-types
 
+# Format every TS / TSX / MD file with Prettier
+pnpm format
+
 # Lint
 pnpm lint
 
 # Build with watch (individual package)
 pnpm --filter @swarm/compute dev
+
+# Run orchestrator + 6 A2A servers + Next.js cockpit in parallel
+pnpm dev
 ```
 
 ---
 
 ## Key Dependencies
+
+### Runtime — agents & orchestrator
 
 - [`@0glabs/0g-serving-broker`](https://www.npmjs.com/package/@0glabs/0g-serving-broker) — 0G Compute paymaster & inference client
 - [`@0gfoundation/0g-ts-sdk`](https://www.npmjs.com/package/@0gfoundation/0g-ts-sdk) — 0G Storage SDK (file upload / root hash)
@@ -281,6 +372,14 @@ pnpm --filter @swarm/compute dev
 - [`zod`](https://www.npmjs.com/package/zod) — Runtime config & env validation
 - [`express`](https://www.npmjs.com/package/express) — REST API server
 - [`uuid`](https://www.npmjs.com/package/uuid) — Cycle ID generation
+
+### Cockpit — `apps/web`
+
+- [`@copilotkit/react-core`](https://www.npmjs.com/package/@copilotkit/react-core) + [`@copilotkit/react-ui`](https://www.npmjs.com/package/@copilotkit/react-ui) — chat shell, tool actions, HITL renderers
+- [`@copilotkit/runtime`](https://www.npmjs.com/package/@copilotkit/runtime) — Next.js API route adapter
+- [`@ag-ui/a2a-middleware`](https://www.npmjs.com/package/@ag-ui/a2a-middleware) — bridges AG-UI tool calls to A2A JSON-RPC
+- [`@ai-sdk/google`](https://www.npmjs.com/package/@ai-sdk/google) — Gemini provider for the orchestrator
+- [`next`](https://www.npmjs.com/package/next) 15 + [`react`](https://www.npmjs.com/package/react) 19 + [`tailwindcss`](https://www.npmjs.com/package/tailwindcss) v4
 
 ---
 
