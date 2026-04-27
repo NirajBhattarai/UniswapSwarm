@@ -8,6 +8,10 @@
  */
 
 import React from "react";
+import {
+  SWARM_PIPELINE_NODE_IDS,
+  SWARM_PIPELINE_STAGE_ORDER,
+} from "../pipeline/swarm-pipeline-ids";
 import type {
   AgentStorageWrite,
   CritiqueData,
@@ -23,7 +27,26 @@ import type {
 
 interface SwarmDataCardsProps {
   state: SwarmAggregateState;
+  /** When set (e.g. from the pipeline graph), the matching section is highlighted. */
+  selectedId?: string | null;
 }
+
+const SectionWrap: React.FC<{
+  sectionId: string;
+  selected: boolean;
+  children: React.ReactNode;
+}> = ({ sectionId, selected, children }) => (
+  <div
+    id={`swarm-section-${sectionId}`}
+    className={
+      selected
+        ? "rounded-[14px] ring-2 ring-[#85e0ce] ring-offset-2 ring-offset-white/50"
+        : undefined
+    }
+  >
+    {children}
+  </div>
+);
 
 const formatUsd = (value?: number) =>
   typeof value === "number"
@@ -35,7 +58,79 @@ const formatUsd = (value?: number) =>
       }).format(value)
     : "—";
 
-export const SwarmDataCards: React.FC<SwarmDataCardsProps> = ({ state }) => {
+// ── Per-agent storage footer ──────────────────────────────────────────────────
+
+const formatHashShortInline = (hash: string): string => {
+  if (hash.length <= 14) return hash;
+  return `${hash.slice(0, 8)}…${hash.slice(-4)}`;
+};
+
+const formatBytesInline = (bytes: number): string => {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+};
+
+/**
+ * Shows the 0G Storage writes that this agent produced — rendered at the
+ * bottom of every per-agent pipeline card so the user can see the storage
+ * location without leaving the flow canvas.
+ */
+const StorageFooter: React.FC<{ writes: AgentStorageWrite[] }> = ({
+  writes,
+}) => {
+  if (writes.length === 0) return null;
+  return (
+    <div className="mt-2 border-t border-dashed border-cyan-200 pt-2">
+      <p className="mb-1 text-[9px] font-semibold uppercase tracking-widest text-cyan-600">
+        🗄️ 0G Storage
+      </p>
+      <ul className="space-y-1">
+        {writes.map((entry, idx) => {
+          const isLocal = entry.hash.startsWith("local:");
+          return (
+            <li
+              key={`${entry.key}-${entry.hash}-${idx}`}
+              className={`flex items-center justify-between gap-1.5 rounded-md border px-2 py-1 font-mono text-[10px] ${
+                isLocal
+                  ? "border-amber-200 bg-amber-50 text-amber-800"
+                  : "border-cyan-200 bg-cyan-50 text-cyan-800"
+              }`}
+            >
+              <span className="truncate font-semibold not-italic">
+                {entry.key}
+              </span>
+              <span className="shrink-0 flex items-center gap-1 opacity-80">
+                <span>→</span>
+                <span>{formatHashShortInline(entry.hash)}</span>
+                <span className="opacity-60">·</span>
+                <span>{formatBytesInline(entry.sizeBytes ?? 0)}</span>
+                <span
+                  className={`ml-1 rounded-full px-1.5 py-0.5 text-[9px] font-semibold ${
+                    isLocal
+                      ? "bg-amber-200 text-amber-800"
+                      : "bg-cyan-200 text-cyan-800"
+                  }`}
+                >
+                  {isLocal ? "local" : "0G ✓"}
+                </span>
+              </span>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+};
+
+/**
+ * Renders a single pipeline stage (used inside React Flow card nodes and in the
+ * optional stacked `SwarmDataCards` list).
+ */
+export const SwarmPipelineStageBody: React.FC<{
+  sectionId: string;
+  state: SwarmAggregateState;
+}> = ({ sectionId, state }) => {
   const {
     research,
     plan,
@@ -47,24 +142,89 @@ export const SwarmDataCards: React.FC<SwarmDataCardsProps> = ({ state }) => {
     storage,
   } = state;
 
+  // Writes belonging to this specific agent (empty for userIntent / storage nodes).
+  const agentWrites =
+    sectionId === SWARM_PIPELINE_NODE_IDS.userIntent ||
+    sectionId === SWARM_PIPELINE_NODE_IDS.storage
+      ? []
+      : (storage ?? []).filter((w) => w.agentId === sectionId);
+
+  switch (sectionId) {
+    case SWARM_PIPELINE_NODE_IDS.userIntent:
+      return (
+        <div className="rounded-xl border border-slate-200 bg-white/90 p-3 shadow-sm">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+            User intent
+          </p>
+          <p className="mt-1 text-sm text-slate-800">
+            {request ?? "Send a message to the swarm to get started."}
+          </p>
+        </div>
+      );
+    case SWARM_PIPELINE_NODE_IDS.researcher:
+      return (
+        <>
+          <ResearchCard data={research} />
+          <StorageFooter writes={agentWrites} />
+        </>
+      );
+    case SWARM_PIPELINE_NODE_IDS.planner:
+      return (
+        <>
+          <PlanCard data={plan} />
+          <StorageFooter writes={agentWrites} />
+        </>
+      );
+    case SWARM_PIPELINE_NODE_IDS.risk:
+      return (
+        <>
+          <RiskCard data={risk} />
+          <StorageFooter writes={agentWrites} />
+        </>
+      );
+    case SWARM_PIPELINE_NODE_IDS.strategy:
+      return (
+        <>
+          <StrategyCard data={strategy} />
+          <StorageFooter writes={agentWrites} />
+        </>
+      );
+    case SWARM_PIPELINE_NODE_IDS.critic:
+      return (
+        <>
+          <CritiqueCard data={critique} />
+          <StorageFooter writes={agentWrites} />
+        </>
+      );
+    case SWARM_PIPELINE_NODE_IDS.executor:
+      return (
+        <>
+          <ExecutionCard data={execution} />
+          <StorageFooter writes={agentWrites} />
+        </>
+      );
+    case SWARM_PIPELINE_NODE_IDS.storage:
+      return <StorageAuditCard writes={storage} />;
+    default:
+      return null;
+  }
+};
+
+export const SwarmDataCards: React.FC<SwarmDataCardsProps> = ({
+  state,
+  selectedId = null,
+}) => {
   return (
     <div className="space-y-3">
-      <div className="rounded-xl border border-slate-200 bg-white/90 p-3 shadow-sm">
-        <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-          User intent
-        </p>
-        <p className="mt-1 text-sm text-slate-800">
-          {request ?? "Send a message to the swarm to get started."}
-        </p>
-      </div>
-
-      <ResearchCard data={research} />
-      <PlanCard data={plan} />
-      <RiskCard data={risk} />
-      <StrategyCard data={strategy} />
-      <CritiqueCard data={critique} />
-      <ExecutionCard data={execution} />
-      <StorageAuditCard writes={storage} />
+      {SWARM_PIPELINE_STAGE_ORDER.map((sectionId) => (
+        <SectionWrap
+          key={sectionId}
+          sectionId={sectionId}
+          selected={selectedId === sectionId}
+        >
+          <SwarmPipelineStageBody sectionId={sectionId} state={state} />
+        </SectionWrap>
+      ))}
     </div>
   );
 };

@@ -112,38 +112,7 @@ export const MessageFromA2A: React.FC<MessageActionRenderProps> = (props) => {
           </span>
         </div>
 
-        {writes.length > 0 && (
-          <div className="mt-2 flex flex-wrap items-center gap-1.5 border-t border-sky-100 pt-2">
-            <span className="text-[10px] font-semibold uppercase tracking-wide text-cyan-700">
-              🗄️ 0G Storage
-            </span>
-            {writes.map((entry, idx) => {
-              const isLocal = entry.hash.startsWith("local:");
-              return (
-                <span
-                  key={`${entry.key}-${entry.hash}-${idx}`}
-                  // Stagger each chip in by ~50ms so they appear to arrive
-                  // sequentially after the bubble itself slides in.
-                  style={{ animationDelay: `${100 + idx * 60}ms` }}
-                  className={`swarm-chip-in inline-flex items-center gap-1 rounded-full border px-2 py-0.5 font-mono text-[10px] ${
-                    isLocal
-                      ? "border-amber-300 bg-amber-50 text-amber-800"
-                      : "border-cyan-300 bg-white text-cyan-800"
-                  }`}
-                  title={`${entry.role} wrote ${entry.key} → ${entry.hash} (${formatBytes(
-                    entry.sizeBytes ?? 0,
-                  )})`}
-                >
-                  <span className="font-semibold not-italic">{entry.key}</span>
-                  <span className="opacity-70">→</span>
-                  <span>{truncateHash(entry.hash)}</span>
-                  <span className="opacity-60">·</span>
-                  <span>{formatBytes(entry.sizeBytes ?? 0)}</span>
-                </span>
-              );
-            })}
-          </div>
-        )}
+        {/* Storage writes are now shown on the pipeline card for each agent */}
       </div>
     </div>
   );

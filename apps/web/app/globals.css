@@ -79,6 +79,18 @@ body {
   40%           { transform: scale(1);   opacity: 1; }
 }
 
+/* ── React Flow pipeline card entrance ─────────────────────────────────── */
+
+@keyframes pipeline-card-in {
+  0%   { opacity: 0; transform: translateY(10px) scale(0.96); }
+  60%  { opacity: 1; transform: translateY(-2px) scale(1.005); }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.pipeline-card-in {
+  animation: pipeline-card-in 0.38s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
 .swarm-card-in-left  { animation: swarm-card-in-left  220ms cubic-bezier(0.2, 0.8, 0.2, 1) both; }
 .swarm-card-in-right { animation: swarm-card-in-right 240ms cubic-bezier(0.2, 0.8, 0.2, 1) both; }
 .swarm-chip-in       { animation: swarm-chip-in       220ms cubic-bezier(0.2, 0.8, 0.2, 1) both; }
@@ -161,7 +173,23 @@ body {
 .swarm-dots span:nth-child(2) { animation-delay: 0.15s; }
 .swarm-dots span:nth-child(3) { animation-delay: 0.3s; }
 
+/* React Flow pipeline: travelling dash on active edges (DataFlowEdge). */
+@keyframes pipeline-edge-dash {
+  to {
+    stroke-dashoffset: -32;
+  }
+}
+
+.pipeline-edge-flow-anim {
+  stroke-dasharray: 8 12;
+  animation: pipeline-edge-dash 0.9s linear infinite;
+}
+
 @media (prefers-reduced-motion: reduce) {
+  .pipeline-edge-flow-anim {
+    animation: none;
+  }
+
   .swarm-card-in-left,
   .swarm-card-in-right,
   .swarm-chip-in,

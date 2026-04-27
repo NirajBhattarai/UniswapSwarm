@@ -175,10 +175,18 @@ export function createServer(
 
       try {
         let result: unknown;
+        const onChunk =
+          (agentId: string) =>
+          (chunk: string): void => {
+            emit({ type: "delta", cycleId, agentId, content: chunk, ts: ts() });
+          };
 
         if (selectedAgent === "trade_pipeline") {
           emitAgentStart("researcher", "run_researcher_report");
-          const research = await orchestrator.runResearcher(requestText);
+          const research = await orchestrator.runResearcher(
+            requestText,
+            onChunk("researcher"),
+          );
           emitAgentDone(
             "researcher",
             "run_researcher_report",
@@ -196,7 +204,10 @@ export function createServer(
           });
 
           emitAgentStart("planner", "run_plan");
-          const plan = await orchestrator.runPlanner(requestText);
+          const plan = await orchestrator.runPlanner(
+            requestText,
+            onChunk("planner"),
+          );
           emitAgentDone(
             "planner",
             "run_plan",
@@ -214,7 +225,7 @@ export function createServer(
           });
 
           emitAgentStart("risk", "run_risk");
-          const riskAssessments = await orchestrator.runRisk();
+          const riskAssessments = await orchestrator.runRisk(onChunk("risk"));
           const passedCount = riskAssessments.filter(
             (item) => item.passed,
           ).length;
@@ -235,7 +246,7 @@ export function createServer(
           });
 
           emitAgentStart("strategy", "run_strategy");
-          const strategy = await orchestrator.runStrategy();
+          const strategy = await orchestrator.runStrategy(onChunk("strategy"));
           emitAgentDone(
             "strategy",
             "run_strategy",
@@ -257,7 +268,7 @@ export function createServer(
           });
 
           emitAgentStart("critic", "run_critic");
-          const critique = await orchestrator.runCritic();
+          const critique = await orchestrator.runCritic(onChunk("critic"));
           emitAgentDone(
             "critic",
             "run_critic",
@@ -346,24 +357,32 @@ export function createServer(
         } else {
           const runMap: Record<SwarmAgentName, () => Promise<unknown>> = {
             trade_pipeline: async () => null,
-            researcher: () => orchestrator.runResearcher(requestText),
+            researcher: () =>
+              orchestrator.runResearcher(requestText, onChunk(selectedAgent)),
             researcher_market: async () => null,
             researcher_prices: async () => null,
-            planner: () => orchestrator.runPlanner(requestText),
-            risk: () => orchestrator.runRisk(),
-            strategy: () => orchestrator.runStrategy(),
-            critic: () => orchestrator.runCritic(),
+            planner: () =>
+              orchestrator.runPlanner(requestText, onChunk(selectedAgent)),
+            risk: () => orchestrator.runRisk(onChunk(selectedAgent)),
+            strategy: () => orchestrator.runStrategy(onChunk(selectedAgent)),
+            critic: () => orchestrator.runCritic(onChunk(selectedAgent)),
             executor: () => orchestrator.runExecutor(),
             cycle: () => orchestrator.runCycle(),
             wallet_watch: async () => {
-              const research = await orchestrator.runResearcher(requestText);
+              const research = await orchestrator.runResearcher(
+                requestText,
+                onChunk("researcher"),
+              );
               addTransfer({
                 from: "researcher",
                 to: "planner",
                 summary: "Research report handed to planner",
                 payload: { candidates: research.candidates.length },
               });
-              const plan = await orchestrator.runPlanner(requestText);
+              const plan = await orchestrator.runPlanner(
+                requestText,
+                onChunk("planner"),
+              );
               return { research, plan, readyToSign: true };
             },
           };

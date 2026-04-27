@@ -7,6 +7,10 @@ import { getConfig, logger } from "@swarm/shared";
 export interface InferOptions {
   maxTokens?: number;
   temperature?: number;
+  /** Called for every SSE token chunk as it arrives from 0G compute.
+   *  Use this to forward the stream to an HTTP client while inferJSON
+   *  simultaneously accumulates the full response and saves it. */
+  onChunk?: (chunk: string) => void;
 }
 
 interface ServiceMeta {
@@ -325,14 +329,22 @@ export class ZGCompute {
     }
   }
 
-  // ── JSON inference ──────────────────────────────────────────────────────────
+  // ── JSON inference (collects streaming chunks then parses) ──────────────────
 
   async inferJSON<T>(
     systemPrompt: string,
     userPrompt: string,
     opts: InferOptions = {},
   ): Promise<T> {
-    const raw = await this.infer(systemPrompt, userPrompt, opts);
+    let raw = "";
+    for await (const chunk of this.inferStream(
+      systemPrompt,
+      userPrompt,
+      opts,
+    )) {
+      raw += chunk;
+      opts.onChunk?.(chunk);
+    }
 
     // 1. Strip markdown code fences if present
     const stripped = raw

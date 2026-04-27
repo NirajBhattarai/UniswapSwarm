@@ -1,6 +1,7 @@
 import { v4 as uuidv4 } from "uuid";
 import { ZGCompute } from "@swarm/compute";
 import { BlackboardMemory, ZGStorage } from "@swarm/memory";
+import type { InferOptions } from "@swarm/compute";
 import { PlannerAgent } from "@swarm/agent-planner";
 import { ResearchAgent } from "@swarm/agent-researcher";
 import type {
@@ -222,24 +223,32 @@ export class SwarmOrchestrator {
   // Each method runs a single agent in isolation. The agent reads whatever
   // prior state is currently in shared memory and writes its output there.
 
-  async runResearcher(goal?: string): Promise<ResearchReport> {
-    return this.researcher.run(goal ?? GOAL);
+  async runResearcher(
+    goal?: string,
+    onChunk?: InferOptions["onChunk"],
+  ): Promise<ResearchReport> {
+    return this.researcher.run(goal ?? GOAL, onChunk ? { onChunk } : {});
   }
 
-  async runPlanner(goal?: string): Promise<TradePlan> {
-    return this.planner.run(goal ?? GOAL);
+  async runPlanner(
+    goal?: string,
+    onChunk?: InferOptions["onChunk"],
+  ): Promise<TradePlan> {
+    return this.planner.run(goal ?? GOAL, onChunk ? { onChunk } : {});
   }
 
-  async runRisk(): Promise<RiskAssessment[]> {
-    return this.risk.run();
+  async runRisk(onChunk?: InferOptions["onChunk"]): Promise<RiskAssessment[]> {
+    return this.risk.run(onChunk ? { onChunk } : {});
   }
 
-  async runStrategy(): Promise<TradeStrategy | null> {
-    return this.strategy.run();
+  async runStrategy(
+    onChunk?: InferOptions["onChunk"],
+  ): Promise<TradeStrategy | null> {
+    return this.strategy.run(onChunk ? { onChunk } : {});
   }
 
-  async runCritic(): Promise<Critique> {
-    return this.critic.run();
+  async runCritic(onChunk?: InferOptions["onChunk"]): Promise<Critique> {
+    return this.critic.run(onChunk ? { onChunk } : {});
   }
 
   async runExecutor(): Promise<ExecutionResult> {

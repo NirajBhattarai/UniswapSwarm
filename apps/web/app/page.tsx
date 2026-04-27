@@ -1,8 +1,8 @@
 "use client";
 
 import { useState } from "react";
+import { SwarmAgentOutputs } from "../components/SwarmAgentOutputs";
 import { SwarmChat } from "../components/swarm-chat";
-import { SwarmDataCards } from "../components/data/SwarmDataCards";
 import { SWARM_AGENTS } from "../lib/swarm-agents";
 import type { SwarmAggregateState } from "../components/types";
 
@@ -76,8 +76,8 @@ export default function Home() {
             </p>
           </header>
 
-          <div className="min-h-0 flex-1 overflow-auto p-4">
-            <SwarmDataCards state={state} />
+          <div className="min-h-0 flex-1 overflow-hidden p-4">
+            <SwarmAgentOutputs state={state} />
           </div>
         </section>
       </div>
