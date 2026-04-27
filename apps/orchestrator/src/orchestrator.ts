@@ -26,7 +26,7 @@ import type {
 } from "@swarm/shared";
 
 const GOAL =
-  "Identify and execute profitable, low-risk token swaps on Uniswap V3 (Ethereum mainnet). Prioritise capital preservation over profit.";
+  "Identify and execute profitable, low-risk token swaps on Uniswap (Ethereum mainnet). Prioritise capital preservation over profit.";
 
 // ─── SwarmOrchestrator ────────────────────────────────────────────────────────
 //

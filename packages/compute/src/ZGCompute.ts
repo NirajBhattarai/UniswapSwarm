@@ -60,6 +60,9 @@ export class ZGCompute {
     logger.info(
       `[Compute] Provider=${chosen.provider.slice(0, 10)}…  model=${chosen.model}`,
     );
+    console.log(
+      `\n🤖  0G Compute — selected model: \x1b[36m${chosen.model}\x1b[0m  (provider ${chosen.provider.slice(0, 10)}…)\n`,
+    );
 
     // Ensure ledger funded
     await this.autoFundLedger();
@@ -104,6 +107,9 @@ export class ZGCompute {
 
     logger.info(
       `[Compute] Ready — endpoint=${this.service.endpoint || "(unknown)"}  model=${this.service.model}`,
+    );
+    console.log(
+      `✅  0G Compute ready — model: \x1b[32m${this.service.model}\x1b[0m  endpoint: ${this.service.endpoint || "(unknown)"}\n`,
     );
   }
 

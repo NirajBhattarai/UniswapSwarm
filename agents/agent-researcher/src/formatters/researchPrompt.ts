@@ -51,10 +51,25 @@ export function buildNarrativeText(narrativeSignal: NarrativeSignal): string {
 export function buildResearchPrompt(args: BuildResearchPromptArgs): string {
   const { goal, cfg, pools, marketDataText, narrativeText, context } = args;
 
+  // Keep the prompt compact for small-context models by sending only the most
+  // decision-relevant fields and capping total rows.
+  const compactPools = pools.slice(0, 20).map((p) => ({
+    tokenAddress: p.tokenAddress,
+    tokenSymbol: p.tokenSymbol,
+    tokenName: p.tokenName,
+    baseTokenSymbol: p.baseTokenSymbol,
+    poolAddress: p.poolAddress,
+    protocol: p.protocol,
+    feePct: p.feePct,
+    currentPrice: p.currentPrice,
+    liquidityUSD: p.liquidityUSD,
+    priceLabel: p.priceLabel,
+  }));
+
   return [
     `Trading goal: ${goal}`,
     `Default constraints: maxSlippage=${cfg.MAX_SLIPPAGE_PCT}%, maxPosition=$${cfg.MAX_POSITION_USDC} USDC, minLiquidity=$${cfg.MIN_LIQUIDITY_USD.toLocaleString()}`,
-    `Live Uniswap multi-protocol pool data (V2/V3/V4/UniswapX) - each entry has a pre-computed \`tokenAddress\` - use it directly as the candidate \`address\` field:\n${JSON.stringify(pools, null, 2)}`,
+    `Live Uniswap multi-protocol pool data (compact top ${compactPools.length}) - each entry has a pre-computed \`tokenAddress\` - use it directly as the candidate \`address\` field:\n${JSON.stringify(compactPools)}`,
     marketDataText,
     `\nReal-time narrative signal:\n${narrativeText}`,
     context,
@@ -70,6 +85,23 @@ export function enrichCandidatesWithMarketData(
   for (const candidate of candidates) {
     const cg = marketData.get(candidate.symbol);
     if (!cg) continue;
+
+    // If LLM emits an implausible price (e.g. raw quote ratio in ETH terms),
+    // prefer CoinGecko USD price for stable, user-facing output.
+    const candidatePrice = candidate.priceUSD ?? 0;
+    const cgPrice = cg.price_usd ?? 0;
+    const priceRatio =
+      candidatePrice > 0 && cgPrice > 0 ? candidatePrice / cgPrice : 0;
+    const isPriceOutlier =
+      priceRatio > 0 && (priceRatio < 0.2 || priceRatio > 5);
+    if (
+      !candidate.priceUSD ||
+      candidate.priceUSD <= 0 ||
+      candidate.priceUSD < 0.001 ||
+      isPriceOutlier
+    ) {
+      candidate.priceUSD = cg.price_usd;
+    }
 
     if (!candidate.volume24hUSD || candidate.volume24hUSD === 0) {
       candidate.volume24hUSD = cg.volume_24h_usd;

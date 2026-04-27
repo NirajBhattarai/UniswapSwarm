@@ -1,19 +1,19 @@
 import type { TokenDef, QueryPair, NarrativeType } from "./types";
 
-// ─── Minimal Uniswap V3 Pool ABI ──────────────────────────────────────────────
+// ─── Minimal concentrated-liquidity pool ABI ─────────────────────────────────
 
 export const POOL_ABI = [
   "function slot0() external view returns (uint160 sqrtPriceX96, int24 tick, uint16, uint16, uint16, uint8, bool)",
   "function liquidity() external view returns (uint128)",
 ];
 
-// ─── Uniswap V3 QuoterV2 ABI (quoteExactInputSingle) ─────────────────────────
+// ─── Uniswap QuoterV2 ABI (quoteExactInputSingle) ────────────────────────────
 
 export const QUOTER_V2_ABI = [
   "function quoteExactInputSingle((address tokenIn, address tokenOut, uint256 amountIn, uint24 fee, uint160 sqrtPriceLimitX96) params) external returns (uint256 amountOut, uint160 sqrtPriceX96After, uint32 initializedTicksCrossed, uint256 gasEstimate)",
 ];
 
-// ─── Uniswap V3 Factory ABI ───────────────────────────────────────────────────
+// ─── Uniswap pool factory ABI ────────────────────────────────────────────────
 
 export const FACTORY_ABI = [
   "function getPool(address tokenA, address tokenB, uint24 fee) external view returns (address pool)",
@@ -53,6 +53,17 @@ export const SYMBOL_TO_TOKEN: Record<string, TokenDef> = {
   AAVE: { address: "0x7Fc66500c84A76Ad7e9c93437bFc5Ac33E2DDaE9", decimals: 18 },
   MKR: { address: "0x9f8F72aA9304c8B593d555F12eF6589cC3A579A2", decimals: 18 },
   CRV: { address: "0xD533a949740bb3306d119CC777fa900bA034cd52", decimals: 18 },
+  // Narrative extra tokens (ai / l2 / staking narratives)
+  GRT: { address: "0xc944E90C64B2c07662A292be6244BDf05Cda44a7", decimals: 18 },
+  ARB: { address: "0xB50721BCf8d664c30412Cfbc6cf7a15145234ad1", decimals: 18 },
+  MATIC: {
+    address: "0x7D1AfA7B718fb893dB30A3aBc0Cfc608AaCfeBB0",
+    decimals: 18,
+  },
+  LDO: { address: "0x5A98FcBEA516Cf06857215779Fd812CA3beF1B32", decimals: 18 },
+  RPL: { address: "0xD33526068D116cE69F19A9ee46F0bd304F21A51f", decimals: 18 },
+  FET: { address: "0xaea46A60368A7bD060eec7DF8CBa43b7EF41Ad85", decimals: 18 },
+  RNDR: { address: "0x6De037ef9aD2725EB40118Bb1702EBb27e4Aeb24", decimals: 18 },
 };
 
 // Reverse lookup: address (lower-case) → symbol

@@ -1,16 +1,71 @@
 import { UNISWAP_TRADE_API_BASE_URL, getConfig, logger } from "@swarm/shared";
 
-import { QUERY_PAIRS, QUOTE_SWAPPER_ADDRESS } from "../core/constants";
+import {
+  NARRATIVE_EXTRA_SYMBOLS,
+  QUERY_PAIRS,
+  QUOTE_SWAPPER_ADDRESS,
+  SYMBOL_TO_TOKEN,
+  WETH_DEF,
+} from "../core/constants";
 import type {
   PoolSnapshot,
   QueryPair,
   UniswapAPIQuoteResponse,
 } from "../core/types";
+import { fetchTrendingTokens } from "./trendingPairs";
 
 const BASE_SYMBOLS = new Set(["WETH", "USDC", "USDT", "DAI"]);
 const STABLE_SYMBOLS = new Set(["USDC", "USDT", "DAI"]);
 
-export async function fetchOnChainPools(): Promise<PoolSnapshot[]> {
+/** Result of fetchOnChainPools — includes trending token CoinGecko IDs for market-data enrichment */
+export interface OnChainPoolsResult {
+  snapshots: PoolSnapshot[];
+  /** symbol (upper-case) → CoinGecko coin ID for live-trending tokens */
+  trendingCoinGeckoIds: Map<string, string>;
+  /** Top trending symbols from CoinGecko so other services don't refetch */
+  trendingSymbols: string[];
+}
+
+/**
+ * Builds QueryPairs for every token that appears in any narrative's extra-symbols
+ * list AND is registered in SYMBOL_TO_TOKEN (known mainnet address + decimals).
+ * Filters out symbols already covered by the static QUERY_PAIRS set.
+ */
+function buildNarrativeExtraPairs(knownSymbols: Set<string>): QueryPair[] {
+  const allNarrativeSymbols = new Set(
+    Object.values(NARRATIVE_EXTRA_SYMBOLS).flat(),
+  );
+  const pairs: QueryPair[] = [];
+
+  for (const symbol of allNarrativeSymbols) {
+    if (knownSymbols.has(symbol)) continue;
+    const def = SYMBOL_TO_TOKEN[symbol];
+    if (!def) continue; // unknown token — skip
+
+    const amountIn = (10n ** BigInt(def.decimals)).toString();
+    pairs.push({
+      tokenIn: {
+        address: def.address,
+        symbol,
+        name: symbol,
+        decimals: def.decimals,
+      },
+      tokenOut: {
+        address: WETH_DEF.address,
+        symbol: "WETH",
+        name: "Wrapped Ether",
+        decimals: WETH_DEF.decimals,
+      },
+      amountIn,
+      priceLabel: `WETH per ${symbol}`,
+    });
+    logger.debug(`[Researcher] Narrative extra pair queued: ${symbol} vs WETH`);
+  }
+
+  return pairs;
+}
+
+export async function fetchOnChainPools(): Promise<OnChainPoolsResult> {
   const { UNISWAP_API_KEY } = getConfig();
 
   if (!UNISWAP_API_KEY) {
@@ -21,7 +76,42 @@ export async function fetchOnChainPools(): Promise<PoolSnapshot[]> {
     );
   }
 
-  const snapshots = await fetchPoolSnapshots(UNISWAP_API_KEY);
+  // Fetch static curated pairs + live trending tokens in parallel
+  const [snapshots, trendingResult] = await Promise.all([
+    fetchPoolSnapshots(UNISWAP_API_KEY, QUERY_PAIRS),
+    fetchTrendingTokens(),
+  ]);
+
+  // Symbols already covered so we can deduplicate
+  const existingSymbols = new Set(snapshots.map((s) => s.tokenSymbol));
+
+  // Add narrative extra tokens (uses known SYMBOL_TO_TOKEN registry — no RPC call)
+  const narrativePairs = buildNarrativeExtraPairs(existingSymbols);
+  if (narrativePairs.length > 0) {
+    logger.info(
+      `[Researcher] Fetching ${narrativePairs.length} narrative extra pair(s): ${narrativePairs.map((p) => p.tokenIn.symbol).join(", ")}`,
+    );
+    const narrativeSnapshots = await fetchPoolSnapshots(
+      UNISWAP_API_KEY,
+      narrativePairs,
+    );
+    snapshots.push(...narrativeSnapshots);
+    for (const s of narrativeSnapshots) existingSymbols.add(s.tokenSymbol);
+  }
+
+  // Quote trending tokens that aren't already covered
+  const newTrendingPairs = trendingResult.pairs.filter(
+    (p) => !existingSymbols.has(p.tokenIn.symbol),
+  );
+
+  if (newTrendingPairs.length > 0) {
+    const trendingSnapshots = await fetchPoolSnapshots(
+      UNISWAP_API_KEY,
+      newTrendingPairs,
+    );
+    snapshots.push(...trendingSnapshots);
+  }
+
   populateLiquidityUSD(snapshots);
   snapshots.sort((a, b) => b.liquidityUSD - a.liquidityUSD);
 
@@ -29,20 +119,25 @@ export async function fetchOnChainPools(): Promise<PoolSnapshot[]> {
     throw new Error(
       "[Researcher] No pool data could be retrieved from the Uniswap Trading API. " +
         "Verify your UNISWAP_API_KEY is valid, not rate-limited, and that the " +
-        "token pairs have active V3 liquidity. Pipeline cannot proceed without pool data.",
+        "token pairs have active Uniswap liquidity. Pipeline cannot proceed without pool data.",
     );
   }
 
-  return snapshots;
+  return {
+    snapshots,
+    trendingCoinGeckoIds: trendingResult.coinGeckoIds,
+    trendingSymbols: trendingResult.trendingSymbols,
+  };
 }
 
 async function fetchPoolSnapshots(
   uniswapApiKey: string,
+  pairs: QueryPair[],
 ): Promise<PoolSnapshot[]> {
   const snapshots: PoolSnapshot[] = [];
 
   await Promise.all(
-    QUERY_PAIRS.map(async (pair) => {
+    pairs.map(async (pair) => {
       const snapshot = await fetchPoolSnapshotForPair(pair, uniswapApiKey);
       if (snapshot) snapshots.push(snapshot);
     }),
@@ -57,12 +152,16 @@ async function fetchPoolSnapshotForPair(
 ): Promise<PoolSnapshot | null> {
   try {
     const data = await fetchUniswapQuoteForPair(pair, uniswapApiKey);
+    if (!data) {
+      // fetchUniswapQuoteForPair already logged a status-specific message.
+      return null;
+    }
     const quote = data?.quote;
 
     // The Trading API can return:
-    //  - a CLASSIC quote with a populated `route: pool[][]` (V2/V3/V4),
-    //  - a UNISWAPX (DUTCH_LIMIT/DUTCH_V2/V3) quote whose payload omits
-    //    `route` entirely or returns it as `undefined`,
+    //  - a classic pool quote with a populated `route: pool[][]`,
+    //  - a UniswapX quote whose payload omits `route` entirely or returns it
+    //    as `undefined`,
     //  - or an error envelope (`errorCode` + `detail`) with no `quote` at all.
     // Defensively guard every level so non-classic responses don't crash with
     // "Cannot read properties of undefined (reading 'length')".
@@ -137,6 +236,12 @@ async function fetchUniswapQuoteForPair(
 
   if (!res.ok) {
     const errText = await res.text();
+    if (res.status === 403) {
+      logger.debug(
+        `[Researcher] Uniswap API 403 (tier-limited) for ${pair.tokenIn.symbol}/${pair.tokenOut.symbol}`,
+      );
+      return null;
+    }
     logger.warn(
       `[Researcher] Uniswap API ${res.status} for ${pair.tokenIn.symbol}/${pair.tokenOut.symbol}: ${errText}`,
     );
@@ -204,12 +309,22 @@ function populateLiquidityUSD(snapshots: PoolSnapshot[]): void {
 
   for (const s of snapshots) {
     const basePriceUSD = resolveBaseTokenPriceUSD(s.baseTokenSymbol, wethUSD);
-    s.liquidityUSD =
+    const estimated =
       basePriceUSD > 0 ? Math.round(s.virtualToken1 * basePriceUSD * 2) : 0;
+
+    // `sqrtRatioX96` + `liquidity` based TVL estimates can become wildly large
+    // for some routed quotes; clamp to keep rankings sane and avoid fake billions.
+    s.liquidityUSD = normalizeLiquidityUSD(estimated);
     logger.debug(
       `[Researcher] ${s.tokenSymbol}/${s.baseTokenSymbol} (${s.protocol}) liquidityUSD=$${s.liquidityUSD.toLocaleString()}`,
     );
   }
+}
+
+function normalizeLiquidityUSD(value: number): number {
+  if (!Number.isFinite(value) || value <= 0) return 0;
+  const MAX_REASONABLE_LIQUIDITY_USD = 250_000_000;
+  return Math.min(Math.round(value), MAX_REASONABLE_LIQUIDITY_USD);
 }
 
 function findWethUsdReferencePrice(snapshots: PoolSnapshot[]): number {

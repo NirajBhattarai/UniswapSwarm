@@ -6,7 +6,7 @@ import {
   UNISWAP,
   UNISWAP_TRADE_API_BASE_URL,
 } from "@swarm/shared";
-import type { ResearchReport } from "@swarm/shared";
+import type { ResearchReport, TokenCandidate } from "@swarm/shared";
 import { ethers } from "ethers";
 import { Impit } from "impit";
 
@@ -41,6 +41,7 @@ import type {
   CoinGeckoMarketData,
   TokenPriceResult,
   PriceQuoteResponse,
+  PoolSnapshot,
 } from "./core";
 
 export type { TokenPriceResult, PriceQuoteResponse, CoinGeckoMarketData };
@@ -87,24 +88,35 @@ export class ResearchAgent {
    */
   async run(goal: string, opts: InferOptions = {}): Promise<ResearchReport> {
     logger.info(
-      `[Researcher] Fetching Uniswap V3 pool data via Uniswap Trading API…`,
+      `[Researcher] Fetching Uniswap multi-protocol pool data via Uniswap Trading API…`,
     );
 
-    // Fetch pools, CoinGecko base data, and narrative signal all in parallel
-    const [pools, narrativeSignal] = await Promise.all([
-      fetchOnChainPools(),
-      fetchNarrativeSignal(this.browser),
-    ]);
+    // Fetch pools first so we can reuse its CoinGecko trending list and avoid
+    // a duplicate /search/trending API call inside narrativeSignal.
+    const poolsResult = await fetchOnChainPools();
+    const {
+      snapshots: pools,
+      trendingCoinGeckoIds,
+      trendingSymbols,
+    } = poolsResult;
+    const narrativeSignal = await fetchNarrativeSignal(
+      this.browser,
+      trendingSymbols,
+    );
     logger.info(
       `[Researcher] Fetched ${pools.length} pools | narrative=${narrativeSignal.narrative} fearGreed=${narrativeSignal.fearGreedValue} trending=[${narrativeSignal.trendingTokens.join(",")}]`,
     );
 
-    // Fetch market data for base symbols + narrative-relevant extras
+    // Fetch market data for all known symbols + trending tokens (using live CoinGecko IDs
+    // so we don't miss tokens absent from the static SYMBOL_TO_COINGECKO_ID map)
     const allSymbols = [
       ...Object.keys(SYMBOL_TO_COINGECKO_ID),
       ...narrativeSignal.extraSymbols,
     ];
-    const marketData = await fetchCoinGeckoMarketDataService(allSymbols);
+    const marketData = await fetchCoinGeckoMarketDataService(
+      allSymbols,
+      trendingCoinGeckoIds,
+    );
 
     const cfg = getConfig();
     const context = this.memory.contextFor(ResearchAgent.MEMORY_KEY);
@@ -122,13 +134,18 @@ export class ResearchAgent {
     const report = await this.compute.inferJSON<ResearchReport>(
       SYSTEM_PROMPT,
       userPrompt,
-      { maxTokens: 2048, ...opts },
+      { maxTokens: 4096, ...opts },
     );
 
     report.timestamp = Date.now();
     report.dataSource = "uniswap-multi-protocol";
 
     enrichCandidatesWithMarketData(report.candidates, marketData);
+    report.candidates = this.postValidateCandidates(
+      report.candidates,
+      pools,
+      marketData,
+    );
     report.candidates = filterCandidatesByLiquidity(
       report.candidates,
       cfg.MIN_LIQUIDITY_USD,
@@ -144,6 +161,84 @@ export class ResearchAgent {
       `[Researcher] Saved ${report.candidates.length} candidates to shared memory`,
     );
     return report;
+  }
+
+  /**
+   * Post-validates LLM output against live pool snapshots + canonical token map.
+   * This prevents symbol/address hallucinations in the final API response.
+   */
+  private postValidateCandidates(
+    candidates: TokenCandidate[],
+    pools: PoolSnapshot[],
+    marketData: Map<string, CoinGeckoMarketData>,
+  ): TokenCandidate[] {
+    const bestPoolBySymbol = new Map<string, PoolSnapshot>();
+
+    for (const pool of pools) {
+      const symbol = pool.tokenSymbol.toUpperCase();
+      const existing = bestPoolBySymbol.get(symbol);
+      if (!existing || pool.liquidityUSD > existing.liquidityUSD) {
+        bestPoolBySymbol.set(symbol, pool);
+      }
+    }
+
+    const validated: TokenCandidate[] = [];
+    let dropped = 0;
+
+    for (const c of candidates) {
+      const symbol = c.symbol.toUpperCase();
+      const pool = bestPoolBySymbol.get(symbol);
+
+      // If we never quoted this symbol on-chain in this cycle, discard it.
+      if (!pool) {
+        dropped += 1;
+        continue;
+      }
+
+      const canonicalAddress =
+        SYMBOL_TO_TOKEN[symbol]?.address ?? pool.tokenAddress;
+      const checksummedAddress = this.toChecksumSafe(canonicalAddress);
+
+      const fixed: TokenCandidate = {
+        ...c,
+        symbol,
+        address: checksummedAddress,
+        name: pool.tokenName || c.name || symbol,
+        pairAddress: this.toChecksumSafe(pool.poolAddress),
+        baseToken: pool.baseTokenSymbol,
+        poolFeeTier: pool.feePct,
+        liquidityUSD: pool.liquidityUSD,
+        txCount: Number.isFinite(c.txCount) ? c.txCount : 0,
+      };
+
+      if (!Number.isFinite(fixed.priceUSD) || fixed.priceUSD <= 0) {
+        fixed.priceUSD = pool.currentPrice;
+      }
+
+      const cg = marketData.get(symbol);
+      if (cg) {
+        fixed.volume24hUSD = cg.volume_24h_usd;
+        fixed.priceChange24hPct = cg.price_change_24h_pct;
+      }
+
+      validated.push(fixed);
+    }
+
+    if (dropped > 0) {
+      logger.info(
+        `[Researcher] Post-validation dropped ${dropped} hallucinated/unknown candidate(s)`,
+      );
+    }
+
+    return validated;
+  }
+
+  private toChecksumSafe(address: string): string {
+    try {
+      return ethers.getAddress(address);
+    } catch {
+      return address;
+    }
   }
 
   // ── Public: fetch real-time USD prices from Uniswap on-chain data ─────────────
@@ -585,7 +680,7 @@ export class ResearchAgent {
         const sqrtPriceX96 = slot0Result[0];
         if (sqrtPriceX96 === 0n) continue;
 
-        // Determine token ordering (lower address = token0 in Uniswap V3)
+        // Determine token ordering (lower address = token0 in concentrated-liquidity pools)
         const aIsToken0 =
           tokenA.address.toLowerCase() < quoteToken.address.toLowerCase();
 

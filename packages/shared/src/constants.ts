@@ -5,7 +5,7 @@ export const UNISWAP_TRADE_API_BASE_URL =
 // CoinGecko API (free demo tier + pro tier — both use the same base URL with different key headers)
 export const COINGECKO_API_BASE_URL = "https://api.coingecko.com/api/v3";
 
-// Uniswap V3 Ethereum Mainnet addresses
+// Uniswap Ethereum mainnet protocol addresses used across the swarm
 export const UNISWAP = {
   SWAP_ROUTER_02: "0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45",
   QUOTER_V2: "0x61fFE014bA17989E743c5F6cB21bF9697530B21e",
@@ -23,7 +23,7 @@ export const TOKENS = {
 export const POOL_FEE_TIERS = [500, 3000, 10_000] as const;
 export type PoolFeeTier = (typeof POOL_FEE_TIERS)[number];
 
-// Uniswap V3 subgraph (hosted service — free, no API key needed)
+// Legacy Uniswap subgraph endpoint (currently unused in the swarm)
 export const UNISWAP_SUBGRAPH_URL =
   "https://api.thegraph.com/subgraphs/name/uniswap/uniswap-v3";
 
@@ -68,6 +68,8 @@ export const STABLECOIN_ADDRESSES: ReadonlySet<string> = new Set(
     "0x853d955aCEf822Db058eb8505911ED77F175b99e", // FRAX
     "0x0000000000085d4780B73119b644AE5ecd22b376", // TUSD
     "0x8E870D67F660D95d5be530380D0eC0bd388289E1", // USDP (Pax Dollar)
+    "0x056Fd409E1d7A124BD7017459dFEa2F387b6d5Cd", // GUSD
+    "0x0fA8781a83E46826621b3BC094Ea2A0212e71B23", // USDD
     "0xc5f0f7b66764F6ec8C8Dff7BA683102295E16409", // FDUSD
     "0x6c3ea9036406852006290770BEdFcAbA0e23A0e8", // PYUSD
     "0x4c9EDD5852cd905f086C759E8383e09bff1E68B3", // USDe

@@ -3,8 +3,14 @@ import { COINGECKO_API_BASE_URL, getConfig, logger } from "@swarm/shared";
 import { SYMBOL_TO_COINGECKO_ID } from "../core/constants";
 import type { CoinGeckoMarketData } from "../core/types";
 
+/**
+ * @param symbols  Token symbols to look up via the static SYMBOL_TO_COINGECKO_ID map
+ * @param extraIds Additional symbol→coinGeckoId mappings for dynamically discovered tokens
+ *                 (e.g. live-trending tokens whose IDs are returned by the CoinGecko trending API)
+ */
 export async function fetchCoinGeckoMarketData(
   symbols: string[],
+  extraIds?: Map<string, string>,
 ): Promise<Map<string, CoinGeckoMarketData>> {
   const { COINGECKO_API_KEY } = getConfig();
   const result = new Map<string, CoinGeckoMarketData>();
@@ -16,6 +22,7 @@ export async function fetchCoinGeckoMarketData(
     return result;
   }
 
+  // id → symbol(s) mapping — start with statically known tokens
   const idToSymbols = new Map<string, string[]>();
   for (const sym of symbols) {
     const id = SYMBOL_TO_COINGECKO_ID[sym.toUpperCase()];
@@ -23,6 +30,18 @@ export async function fetchCoinGeckoMarketData(
     const existing = idToSymbols.get(id) ?? [];
     existing.push(sym.toUpperCase());
     idToSymbols.set(id, existing);
+  }
+
+  // Merge dynamic IDs (from live trending) so those tokens get market data
+  if (extraIds) {
+    for (const [sym, id] of extraIds) {
+      if (!id) continue;
+      const existing = idToSymbols.get(id) ?? [];
+      if (!existing.includes(sym.toUpperCase())) {
+        existing.push(sym.toUpperCase());
+      }
+      idToSymbols.set(id, existing);
+    }
   }
 
   if (idToSymbols.size === 0) return result;

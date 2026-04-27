@@ -6,13 +6,17 @@ import type { NarrativeSignal, NarrativeType } from "../core/types";
 
 export async function fetchNarrativeSignal(
   browser: Impit,
+  prefetchedTrendingTokens?: string[],
 ): Promise<NarrativeSignal> {
-  const [fearGreed, trending, redditTitles, newsTitles] = await Promise.all([
+  const [fearGreed, redditTitles, newsTitles] = await Promise.all([
     fetchFearGreed(browser),
-    fetchCoinGeckoTrending(browser),
     fetchRedditPosts(browser),
     fetchCoinTelegraphRSS(browser),
   ]);
+  const trending =
+    prefetchedTrendingTokens && prefetchedTrendingTokens.length > 0
+      ? prefetchedTrendingTokens
+      : await fetchCoinGeckoTrending(browser);
 
   const allTitles = [...redditTitles, ...newsTitles];
   const scores = scoreNarratives(allTitles);

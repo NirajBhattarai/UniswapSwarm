@@ -1,7 +1,7 @@
 // ─── Uniswap Trading API response types ──────────────────────────────────────
 
 export interface UniswapAPIRoutePool {
-  // "v2-pool" | "v3-pool" | "v4-pool" | "mixed-route"
+  // Trading API route identifier such as a pool route or mixed route
   type: string;
   address: string;
   tokenIn: {
@@ -17,7 +17,7 @@ export interface UniswapAPIRoutePool {
     symbol: string;
   };
   fee: string;
-  // V3/V4 only — absent on V2 pools
+  // Present on concentrated-liquidity pool routes when exposed by the Trading API
   sqrtRatioX96?: string;
   liquidity?: string;
   tick?: number;
@@ -38,8 +38,8 @@ export interface UniswapAPIQuoteResponse {
       amount: string;
     };
     /**
-     * `route` is only populated for CLASSIC routings (V2/V3/V4). UNISWAPX
-     * variants (`DUTCH_LIMIT`, `DUTCH_V2`, `DUTCH_V3`) omit it entirely.
+     * `route` is only populated for classic pool routings. UniswapX variants
+     * can omit it entirely.
      */
     route?: UniswapAPIRoutePool[][];
   };
@@ -78,7 +78,7 @@ export interface PoolSnapshot {
   /** The base token on the other side (WETH / USDC / USDT / DAI) */
   baseTokenSymbol: string;
   baseTokenAddress: string;
-  /** Protocol that produced this quote (v2-pool | v3-pool | v4-pool) */
+  /** Route identifier that produced this quote */
   protocol: string;
   feePct: number;
   priceLabel: string;
