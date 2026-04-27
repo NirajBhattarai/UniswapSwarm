@@ -429,7 +429,7 @@ export const SwarmChat: React.FC<SwarmChatProps> = ({ state, onState }) => {
           initial:
             '👋 I\'m your Uniswap Swarm orchestrator.\n\nJust tell me what you want — e.g. "find some safe trades" or "scout opportunities for ~$200". I\'ll dispatch the Researcher first, then Planner → Risk → Strategy → Critic, and only ask for your approval once I have a concrete trade to propose.',
         }}
-        instructions="You are the Uniswap Swarm orchestrator. Default behaviour: dispatch the Researcher Agent first to discover candidate tokens, then continue through Planner → Risk → Strategy → Critic, and finally show the proposed trade via request_trade_approval. Do NOT call gather_swap_intent unless the user's message has no actionable content."
+        instructions="You are the Uniswap Swarm orchestrator. Dispatch only the stages the user actually asked for. For broad discovery requests, run Researcher first and stop unless the user asks for deeper analysis. Run Risk only when the user explicitly asks for risk/audit/safety checks, or asks for a full pipeline/recommendation/execution. Do NOT call gather_swap_intent unless the user's message has no actionable content."
         suggestions={[
           {
             title: "Find safe trade",

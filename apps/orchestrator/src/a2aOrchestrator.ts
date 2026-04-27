@@ -45,11 +45,13 @@ class SwarmA2AExecutor implements AgentExecutor {
   ): Promise<void> {
     const text = extractUserText(requestContext);
     const selectedAgent = selectAgentForIntent(text);
+    const sessionId = uuidv4();
 
     const { result, flow, transfers } = await runSelectedAgent(
       this.orchestrator,
       selectedAgent,
       text,
+      sessionId,
     );
     const response: Message = {
       kind: "message",
@@ -139,6 +141,7 @@ async function runSelectedAgent(
   orchestrator: SwarmOrchestrator,
   selectedAgent: SwarmAgentName,
   text: string,
+  sessionId: string,
 ): Promise<{
   result: unknown;
   flow: SwarmFlowStep[];
@@ -166,6 +169,7 @@ async function runSelectedAgent(
       const result = await runTradePipeline(
         orchestrator,
         text,
+        sessionId,
         flow,
         transfers,
       );
@@ -178,7 +182,7 @@ async function runSelectedAgent(
         action: "wallet_watch_research",
         status: "running",
       });
-      const research = await orchestrator.runResearcher(text);
+      const research = await orchestrator.runResearcher(sessionId, text);
 
       flow.push({
         from: "orchestrator",
@@ -201,7 +205,7 @@ async function runSelectedAgent(
         action: "wallet_watch_plan",
         status: "running",
       });
-      const plan = await orchestrator.runPlanner(text);
+      const plan = await orchestrator.runPlanner(sessionId, text);
 
       flow.push({
         from: "orchestrator",
@@ -222,7 +226,7 @@ async function runSelectedAgent(
       return { result: { research, plan, readyToSign: true }, flow, transfers };
     }
     case "cycle": {
-      const result = await orchestrator.runCycle();
+      const result = await orchestrator.runCycle(sessionId);
       flow.push({
         from: "orchestrator",
         to: "cycle",
@@ -233,7 +237,7 @@ async function runSelectedAgent(
     }
     case "researcher_market": {
       const tokens = extractTokens(text);
-      const result = await orchestrator.fetchMarketData(tokens);
+      const result = await orchestrator.fetchMarketData(sessionId, tokens);
       flow.push({
         from: "orchestrator",
         to: "researcher_market",
@@ -251,7 +255,7 @@ async function runSelectedAgent(
     }
     case "researcher_prices": {
       const tokens = extractTokens(text);
-      const result = await orchestrator.fetchPrices(tokens);
+      const result = await orchestrator.fetchPrices(sessionId, tokens);
       flow.push({
         from: "orchestrator",
         to: "researcher_prices",
@@ -268,7 +272,7 @@ async function runSelectedAgent(
       return { result, flow, transfers };
     }
     case "researcher": {
-      const result = await orchestrator.runResearcher(text);
+      const result = await orchestrator.runResearcher(sessionId, text);
       flow.push({
         from: "orchestrator",
         to: "researcher",
@@ -278,7 +282,7 @@ async function runSelectedAgent(
       return { result, flow, transfers };
     }
     case "planner": {
-      const result = await orchestrator.runPlanner(text);
+      const result = await orchestrator.runPlanner(sessionId, text);
       flow.push({
         from: "orchestrator",
         to: "planner",
@@ -288,7 +292,7 @@ async function runSelectedAgent(
       return { result, flow, transfers };
     }
     case "risk": {
-      const result = await orchestrator.runRisk();
+      const result = await orchestrator.runRisk(sessionId);
       flow.push({
         from: "orchestrator",
         to: "risk",
@@ -298,7 +302,7 @@ async function runSelectedAgent(
       return { result, flow, transfers };
     }
     case "strategy": {
-      const result = await orchestrator.runStrategy();
+      const result = await orchestrator.runStrategy(sessionId);
       flow.push({
         from: "orchestrator",
         to: "strategy",
@@ -308,7 +312,7 @@ async function runSelectedAgent(
       return { result, flow, transfers };
     }
     case "critic": {
-      const result = await orchestrator.runCritic();
+      const result = await orchestrator.runCritic(sessionId);
       flow.push({
         from: "orchestrator",
         to: "critic",
@@ -318,7 +322,7 @@ async function runSelectedAgent(
       return { result, flow, transfers };
     }
     case "executor": {
-      const result = await orchestrator.runExecutor();
+      const result = await orchestrator.runExecutor(sessionId);
       flow.push({
         from: "orchestrator",
         to: "executor",
@@ -328,7 +332,7 @@ async function runSelectedAgent(
       return { result, flow, transfers };
     }
     default: {
-      const result = await orchestrator.runResearcher(text);
+      const result = await orchestrator.runResearcher(sessionId, text);
       flow.push({
         from: "orchestrator",
         to: "researcher",
@@ -343,6 +347,7 @@ async function runSelectedAgent(
 async function runTradePipeline(
   orchestrator: SwarmOrchestrator,
   goal: string,
+  sessionId: string,
   flow: SwarmFlowStep[],
   transfers: SwarmTransfer[],
 ): Promise<unknown> {
@@ -352,7 +357,7 @@ async function runTradePipeline(
     action: "run_researcher_report",
     status: "running",
   });
-  const research = await orchestrator.runResearcher(goal);
+  const research = await orchestrator.runResearcher(sessionId, goal);
   flow.push({
     from: "orchestrator",
     to: "researcher",
@@ -378,7 +383,7 @@ async function runTradePipeline(
     action: "run_plan",
     status: "running",
   });
-  const plan = await orchestrator.runPlanner(goal);
+  const plan = await orchestrator.runPlanner(sessionId, goal);
   flow.push({
     from: "orchestrator",
     to: "planner",
@@ -408,7 +413,7 @@ async function runTradePipeline(
     action: "run_risk",
     status: "running",
   });
-  const riskAssessments = await orchestrator.runRisk();
+  const riskAssessments = await orchestrator.runRisk(sessionId);
   const passedCount = riskAssessments.filter((item) => item.passed).length;
   flow.push({
     from: "orchestrator",
@@ -434,7 +439,7 @@ async function runTradePipeline(
     action: "run_strategy",
     status: "running",
   });
-  const strategy = await orchestrator.runStrategy();
+  const strategy = await orchestrator.runStrategy(sessionId);
   flow.push({
     from: "orchestrator",
     to: "strategy",
@@ -464,7 +469,7 @@ async function runTradePipeline(
     action: "run_critic",
     status: "running",
   });
-  const critique = await orchestrator.runCritic();
+  const critique = await orchestrator.runCritic(sessionId);
   flow.push({
     from: "orchestrator",
     to: "critic",
@@ -490,7 +495,7 @@ async function runTradePipeline(
     action: "run_executor",
     status: "running",
   });
-  const execution = await orchestrator.runExecutor();
+  const execution = await orchestrator.runExecutor(sessionId);
   flow.push({
     from: "orchestrator",
     to: "executor",

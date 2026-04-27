@@ -17,20 +17,15 @@ export type SwarmAgentDescriptor = {
   /** Card name as published by the A2A server – used for routing by the orchestrator LLM. */
   cardName: string;
   description: string;
-  port: number;
+  route: string;
   envVar: string;
   emoji: string;
   badge: string;
 };
 
-const DEFAULT_PORTS: Record<SwarmAgentId, number> = {
-  researcher: 4101,
-  planner: 4102,
-  risk: 4103,
-  strategy: 4104,
-  critic: 4105,
-  executor: 4106,
-};
+// All agents now run on the same port (4000) with route-based endpoints
+const ORCHESTRATOR_BASE_URL =
+  process.env.ORCHESTRATOR_URL ?? "http://localhost:4000";
 
 export const SWARM_AGENTS: SwarmAgentDescriptor[] = [
   {
@@ -38,7 +33,7 @@ export const SWARM_AGENTS: SwarmAgentDescriptor[] = [
     cardName: "Researcher Agent",
     description:
       "Researches Uniswap V2/V3/V4 + UniswapX pools, fetches CoinGecko market data and narrative signals, and returns ranked candidate trade tokens.",
-    port: DEFAULT_PORTS.researcher,
+    route: "/a2a/agents/researcher",
     envVar: "RESEARCHER_AGENT_URL",
     emoji: "🔎",
     badge: "Researcher",
@@ -48,7 +43,7 @@ export const SWARM_AGENTS: SwarmAgentDescriptor[] = [
     cardName: "Planner Agent",
     description:
       "Builds a structured TradePlan with strategy, risk constraints, and per-agent task graph.",
-    port: DEFAULT_PORTS.planner,
+    route: "/a2a/agents/planner",
     envVar: "PLANNER_AGENT_URL",
     emoji: "🗺️",
     badge: "Planner",
@@ -58,7 +53,7 @@ export const SWARM_AGENTS: SwarmAgentDescriptor[] = [
     cardName: "Risk Agent",
     description:
       "Scores honeypot, ownership concentration, MEV exposure, and liquidity risks, marking unsafe candidates.",
-    port: DEFAULT_PORTS.risk,
+    route: "/a2a/agents/risk",
     envVar: "RISK_AGENT_URL",
     emoji: "🛡️",
     badge: "Risk",
@@ -68,7 +63,7 @@ export const SWARM_AGENTS: SwarmAgentDescriptor[] = [
     cardName: "Strategy Agent",
     description:
       "Picks the safest highest-scoring candidate and crafts the exact swap calldata spec (token-in/out, fee, slippage).",
-    port: DEFAULT_PORTS.strategy,
+    route: "/a2a/agents/strategy",
     envVar: "STRATEGY_AGENT_URL",
     emoji: "🎯",
     badge: "Strategy",
@@ -78,7 +73,7 @@ export const SWARM_AGENTS: SwarmAgentDescriptor[] = [
     cardName: "Critic Agent",
     description:
       "Reviews the assembled plan + strategy and approves/rejects with confidence and issues list.",
-    port: DEFAULT_PORTS.critic,
+    route: "/a2a/agents/critic",
     envVar: "CRITIC_AGENT_URL",
     emoji: "⚖️",
     badge: "Critic",
@@ -88,7 +83,7 @@ export const SWARM_AGENTS: SwarmAgentDescriptor[] = [
     cardName: "Executor Agent",
     description:
       "Executes (or simulates, when DRY_RUN=true) the approved swap via Uniswap SwapRouter02.",
-    port: DEFAULT_PORTS.executor,
+    route: "/a2a/agents/executor",
     envVar: "EXECUTOR_AGENT_URL",
     emoji: "⚡",
     badge: "Executor",
@@ -108,7 +103,8 @@ export function getSwarmAgentUrls(): string[] {
   return SWARM_AGENTS.map((agent) => {
     const fromEnv = process.env[agent.envVar];
     if (fromEnv && fromEnv.trim().length > 0) return fromEnv.trim();
-    return `http://localhost:${agent.port}`;
+    // All agents now run on the same port with route-based endpoints
+    return `${ORCHESTRATOR_BASE_URL}${agent.route}`;
   });
 }
 

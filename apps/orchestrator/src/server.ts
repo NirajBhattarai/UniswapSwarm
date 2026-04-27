@@ -1,4 +1,5 @@
 import express, { type Request, type Response } from "express";
+import { randomUUID } from "node:crypto";
 import { SwarmOrchestrator } from "./orchestrator";
 import { getConfig, logger } from "@swarm/shared";
 import type { SwarmEvent } from "@swarm/shared";
@@ -9,6 +10,7 @@ import {
   type SwarmFlowStep,
   type SwarmTransfer,
 } from "./a2aOrchestrator";
+import { registerSwarmA2AAgentRoutes } from "./a2aAgents";
 
 // ── SSE helpers ────────────────────────────────────────────────────────────────
 
@@ -63,6 +65,32 @@ function extractTokensFromQuery(text: string): string[] {
   return deduped.length > 0 ? deduped.slice(0, 12) : ["ETH", "UNI", "ARB"];
 }
 
+function resolveSessionId(req: Request, autoCreate = true): string {
+  const cached = (req as Request & { __sessionId?: string }).__sessionId;
+  if (cached) return cached;
+
+  const bodySessionId =
+    typeof (req.body as { sessionId?: unknown } | undefined)?.sessionId ===
+    "string"
+      ? ((req.body as { sessionId?: string }).sessionId ?? "").trim()
+      : "";
+  const headerSessionId = (req.header("x-session-id") ?? "").trim();
+  const querySessionId =
+    typeof req.query.sessionId === "string" ? req.query.sessionId.trim() : "";
+
+  const resolved = bodySessionId || headerSessionId || querySessionId;
+  if (resolved) {
+    (req as Request & { __sessionId?: string }).__sessionId = resolved;
+    return resolved;
+  }
+
+  if (!autoCreate) return "";
+
+  const generated = randomUUID();
+  (req as Request & { __sessionId?: string }).__sessionId = generated;
+  return generated;
+}
+
 // ── Factory ───────────────────────────────────────────────────────────────────
 
 export function createServer(
@@ -91,11 +119,24 @@ export function createServer(
 
   registerA2ARoutes(app, orchestrator, publicBaseUrl);
 
+  // Register individual A2A agent routes on the same port
+  const agentRoutes = registerSwarmA2AAgentRoutes(
+    app,
+    orchestrator,
+    publicBaseUrl,
+  );
+
+  // Store agent routes for logging
+  (
+    app as express.Application & { __agentRoutes?: typeof agentRoutes }
+  ).__agentRoutes = agentRoutes;
+
   // ── Intent-routed A2A stream ───────────────────────────────────────────────
   // POST /a2a/route/stream body: { query: string }
   app.post(
     "/a2a/route/stream",
     async (req: Request, res: Response): Promise<void> => {
+      const sessionId = resolveSessionId(req);
       const { query } = req.body as { query?: string };
       const requestText =
         typeof query === "string" && query.trim().length > 0
@@ -165,11 +206,12 @@ export function createServer(
       };
 
       sseHeaders(res);
+      res.setHeader("X-Session-Id", sessionId);
       emit({
         type: "cycle_start",
         cycleId,
         agentId: "orchestrator",
-        data: { selectedAgent },
+        data: { selectedAgent, sessionId },
         ts: ts(),
       });
 
@@ -184,6 +226,7 @@ export function createServer(
         if (selectedAgent === "trade_pipeline") {
           emitAgentStart("researcher", "run_researcher_report");
           const research = await orchestrator.runResearcher(
+            sessionId,
             requestText,
             onChunk("researcher"),
           );
@@ -205,6 +248,7 @@ export function createServer(
 
           emitAgentStart("planner", "run_plan");
           const plan = await orchestrator.runPlanner(
+            sessionId,
             requestText,
             onChunk("planner"),
           );
@@ -225,7 +269,10 @@ export function createServer(
           });
 
           emitAgentStart("risk", "run_risk");
-          const riskAssessments = await orchestrator.runRisk(onChunk("risk"));
+          const riskAssessments = await orchestrator.runRisk(
+            sessionId,
+            onChunk("risk"),
+          );
           const passedCount = riskAssessments.filter(
             (item) => item.passed,
           ).length;
@@ -246,7 +293,10 @@ export function createServer(
           });
 
           emitAgentStart("strategy", "run_strategy");
-          const strategy = await orchestrator.runStrategy(onChunk("strategy"));
+          const strategy = await orchestrator.runStrategy(
+            sessionId,
+            onChunk("strategy"),
+          );
           emitAgentDone(
             "strategy",
             "run_strategy",
@@ -268,7 +318,10 @@ export function createServer(
           });
 
           emitAgentStart("critic", "run_critic");
-          const critique = await orchestrator.runCritic(onChunk("critic"));
+          const critique = await orchestrator.runCritic(
+            sessionId,
+            onChunk("critic"),
+          );
           emitAgentDone(
             "critic",
             "run_critic",
@@ -286,7 +339,7 @@ export function createServer(
           });
 
           emitAgentStart("executor", "run_executor");
-          const execution = await orchestrator.runExecutor();
+          const execution = await orchestrator.runExecutor(sessionId);
           emitAgentDone(
             "executor",
             "run_executor",
@@ -323,7 +376,7 @@ export function createServer(
         } else if (selectedAgent === "researcher_market") {
           const tokens = extractTokensFromQuery(requestText);
           emitAgentStart("researcher_market", "fetch_market_data");
-          const market = await orchestrator.fetchMarketData(tokens);
+          const market = await orchestrator.fetchMarketData(sessionId, tokens);
           emitAgentDone(
             "researcher_market",
             "fetch_market_data",
@@ -340,7 +393,7 @@ export function createServer(
         } else if (selectedAgent === "researcher_prices") {
           const tokens = extractTokensFromQuery(requestText);
           emitAgentStart("researcher_prices", "fetch_token_prices");
-          const prices = await orchestrator.fetchPrices(tokens);
+          const prices = await orchestrator.fetchPrices(sessionId, tokens);
           emitAgentDone(
             "researcher_prices",
             "fetch_token_prices",
@@ -358,18 +411,29 @@ export function createServer(
           const runMap: Record<SwarmAgentName, () => Promise<unknown>> = {
             trade_pipeline: async () => null,
             researcher: () =>
-              orchestrator.runResearcher(requestText, onChunk(selectedAgent)),
+              orchestrator.runResearcher(
+                sessionId,
+                requestText,
+                onChunk(selectedAgent),
+              ),
             researcher_market: async () => null,
             researcher_prices: async () => null,
             planner: () =>
-              orchestrator.runPlanner(requestText, onChunk(selectedAgent)),
-            risk: () => orchestrator.runRisk(onChunk(selectedAgent)),
-            strategy: () => orchestrator.runStrategy(onChunk(selectedAgent)),
-            critic: () => orchestrator.runCritic(onChunk(selectedAgent)),
-            executor: () => orchestrator.runExecutor(),
-            cycle: () => orchestrator.runCycle(),
+              orchestrator.runPlanner(
+                sessionId,
+                requestText,
+                onChunk(selectedAgent),
+              ),
+            risk: () => orchestrator.runRisk(sessionId, onChunk(selectedAgent)),
+            strategy: () =>
+              orchestrator.runStrategy(sessionId, onChunk(selectedAgent)),
+            critic: () =>
+              orchestrator.runCritic(sessionId, onChunk(selectedAgent)),
+            executor: () => orchestrator.runExecutor(sessionId),
+            cycle: () => orchestrator.runCycle(sessionId),
             wallet_watch: async () => {
               const research = await orchestrator.runResearcher(
+                sessionId,
                 requestText,
                 onChunk("researcher"),
               );
@@ -380,6 +444,7 @@ export function createServer(
                 payload: { candidates: research.candidates.length },
               });
               const plan = await orchestrator.runPlanner(
+                sessionId,
                 requestText,
                 onChunk("planner"),
               );
@@ -430,14 +495,16 @@ export function createServer(
 
   // ── Full pipeline — blocking JSON ───────────────────────────────────────────
   app.post("/cycle", async (_req: Request, res: Response): Promise<void> => {
+    const sessionId = resolveSessionId(_req);
     if (orchestrator.isRunning()) {
       res.status(409).json({ error: "A cycle is already running" });
       return;
     }
     try {
       orchestrator.setRunning(true);
-      const state = await orchestrator.runCycle();
-      res.json(state);
+      res.setHeader("X-Session-Id", sessionId);
+      const state = await orchestrator.runCycle(sessionId);
+      res.json({ sessionId, ...state });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       res.status(500).json({ error: msg });
@@ -450,14 +517,16 @@ export function createServer(
   app.post(
     "/cycle/stream",
     async (_req: Request, res: Response): Promise<void> => {
+      const sessionId = resolveSessionId(_req);
       if (orchestrator.isRunning()) {
         res.status(409).json({ error: "A cycle is already running" });
         return;
       }
       sseHeaders(res);
+      res.setHeader("X-Session-Id", sessionId);
       try {
         orchestrator.setRunning(true);
-        for await (const event of orchestrator.runCycleStream()) {
+        for await (const event of orchestrator.runCycleStream(sessionId)) {
           sseSend(res, event);
         }
       } finally {
@@ -474,29 +543,34 @@ export function createServer(
 
   function agentJson(
     agentId: string,
-    runFn: (req: Request) => AgentRunner,
+    runFn: (req: Request, sessionId: string) => AgentRunner,
   ): express.RequestHandler {
     return async (req: Request, res: Response): Promise<void> => {
+      const sessionId = resolveSessionId(req);
       try {
-        const data = await runFn(req)();
-        res.json({ agentId, data });
+        res.setHeader("X-Session-Id", sessionId);
+        const data = await runFn(req, sessionId)();
+        res.json({ sessionId, agentId, data });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        res.status(500).json({ agentId, error: msg });
+        res.status(500).json({ sessionId, agentId, error: msg });
       }
     };
   }
 
   function agentStream(
     agentId: string,
-    runFn: (req: Request) => AgentRunner,
+    runFn: (req: Request, sessionId: string) => AgentRunner,
   ): express.RequestHandler {
     return async (req: Request, res: Response): Promise<void> => {
+      const sessionId = resolveSessionId(req);
       sseHeaders(res);
+      res.setHeader("X-Session-Id", sessionId);
       try {
         for await (const event of orchestrator.runAgentStream(
+          sessionId,
           agentId,
-          runFn(req),
+          runFn(req, sessionId),
         )) {
           sseSend(res, event);
         }
@@ -511,16 +585,16 @@ export function createServer(
   // POST /agents/researcher/stream   body: { goal?: string }
   app.post(
     "/agents/researcher",
-    agentJson("researcher", (req) => {
+    agentJson("researcher", (req, sessionId) => {
       const goal = (req.body as { goal?: string }).goal;
-      return () => orchestrator.runResearcher(goal);
+      return () => orchestrator.runResearcher(sessionId, goal);
     }),
   );
   app.post(
     "/agents/researcher/stream",
-    agentStream("researcher", (req) => {
+    agentStream("researcher", (req, sessionId) => {
       const goal = (req.body as { goal?: string }).goal;
-      return () => orchestrator.runResearcher(goal);
+      return () => orchestrator.runResearcher(sessionId, goal);
     }),
   );
 
@@ -530,6 +604,7 @@ export function createServer(
   app.post(
     "/agents/researcher/prices",
     async (req: Request, res: Response): Promise<void> => {
+      const sessionId = resolveSessionId(req);
       const { tokens } = req.body as { tokens?: string[] };
       if (!Array.isArray(tokens) || tokens.length === 0) {
         res
@@ -538,8 +613,9 @@ export function createServer(
         return;
       }
       try {
-        const data = await orchestrator.fetchPrices(tokens);
-        res.json(data);
+        res.setHeader("X-Session-Id", sessionId);
+        const data = await orchestrator.fetchPrices(sessionId, tokens);
+        res.json({ sessionId, ...data });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         res.status(500).json({ error: msg });
@@ -549,6 +625,7 @@ export function createServer(
   app.post(
     "/agents/researcher/prices/stream",
     async (req: Request, res: Response): Promise<void> => {
+      const sessionId = resolveSessionId(req);
       const { tokens } = req.body as { tokens?: string[] };
       if (!Array.isArray(tokens) || tokens.length === 0) {
         res
@@ -557,10 +634,12 @@ export function createServer(
         return;
       }
       sseHeaders(res);
+      res.setHeader("X-Session-Id", sessionId);
       try {
         for await (const event of orchestrator.runAgentStream(
+          sessionId,
           "researcher",
-          () => orchestrator.fetchPrices(tokens),
+          () => orchestrator.fetchPrices(sessionId, tokens),
         )) {
           sseSend(res, event);
         }
@@ -575,6 +654,7 @@ export function createServer(
   app.post(
     "/agents/researcher/market",
     async (req: Request, res: Response): Promise<void> => {
+      const sessionId = resolveSessionId(req);
       const { tokens } = req.body as { tokens?: string[] };
       if (!Array.isArray(tokens) || tokens.length === 0) {
         res
@@ -583,8 +663,9 @@ export function createServer(
         return;
       }
       try {
-        const data = await orchestrator.fetchMarketData(tokens);
-        res.json(data);
+        res.setHeader("X-Session-Id", sessionId);
+        const data = await orchestrator.fetchMarketData(sessionId, tokens);
+        res.json({ sessionId, data });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         res.status(500).json({ error: msg });
@@ -597,16 +678,16 @@ export function createServer(
   // POST /agents/planner/stream   body: { goal?: string }
   app.post(
     "/agents/planner",
-    agentJson("planner", (req) => {
+    agentJson("planner", (req, sessionId) => {
       const goal = (req.body as { goal?: string }).goal;
-      return () => orchestrator.runPlanner(goal);
+      return () => orchestrator.runPlanner(sessionId, goal);
     }),
   );
   app.post(
     "/agents/planner/stream",
-    agentStream("planner", (req) => {
+    agentStream("planner", (req, sessionId) => {
       const goal = (req.body as { goal?: string }).goal;
-      return () => orchestrator.runPlanner(goal);
+      return () => orchestrator.runPlanner(sessionId, goal);
     }),
   );
 
@@ -634,9 +715,11 @@ export function createServer(
           : "Watch my wallet, map available funds, summarize market/news, then produce an actionable swap plan.";
       const goal = `${baseGoal}\nTarget wallet: ${walletAddress}`;
       const cycleId = `wallet-watch-${Date.now()}`;
+      const sessionId = resolveSessionId(req);
       const ts = () => Date.now();
 
       try {
+        res.setHeader("X-Session-Id", sessionId);
         sseSend(res, {
           type: "cycle_start",
           cycleId,
@@ -650,7 +733,7 @@ export function createServer(
           agentId: "researcher",
           ts: ts(),
         });
-        const research = await orchestrator.runResearcher(goal);
+        const research = await orchestrator.runResearcher(sessionId, goal);
         sseSend(res, {
           type: "agent_done",
           cycleId,
@@ -665,7 +748,7 @@ export function createServer(
           agentId: "planner",
           ts: ts(),
         });
-        const plan = await orchestrator.runPlanner(goal);
+        const plan = await orchestrator.runPlanner(sessionId, goal);
         sseSend(res, {
           type: "agent_done",
           cycleId,
@@ -701,11 +784,15 @@ export function createServer(
   // POST /agents/risk/stream
   app.post(
     "/agents/risk",
-    agentJson("risk", () => () => orchestrator.runRisk()),
+    agentJson("risk", (_req, sessionId) => {
+      return () => orchestrator.runRisk(sessionId);
+    }),
   );
   app.post(
     "/agents/risk/stream",
-    agentStream("risk", () => () => orchestrator.runRisk()),
+    agentStream("risk", (_req, sessionId) => {
+      return () => orchestrator.runRisk(sessionId);
+    }),
   );
 
   // ── Strategy ────────────────────────────────────────────────────────────────
@@ -713,11 +800,15 @@ export function createServer(
   // POST /agents/strategy/stream
   app.post(
     "/agents/strategy",
-    agentJson("strategy", () => () => orchestrator.runStrategy()),
+    agentJson("strategy", (_req, sessionId) => {
+      return () => orchestrator.runStrategy(sessionId);
+    }),
   );
   app.post(
     "/agents/strategy/stream",
-    agentStream("strategy", () => () => orchestrator.runStrategy()),
+    agentStream("strategy", (_req, sessionId) => {
+      return () => orchestrator.runStrategy(sessionId);
+    }),
   );
 
   // ── Critic ──────────────────────────────────────────────────────────────────
@@ -725,11 +816,15 @@ export function createServer(
   // POST /agents/critic/stream
   app.post(
     "/agents/critic",
-    agentJson("critic", () => () => orchestrator.runCritic()),
+    agentJson("critic", (_req, sessionId) => {
+      return () => orchestrator.runCritic(sessionId);
+    }),
   );
   app.post(
     "/agents/critic/stream",
-    agentStream("critic", () => () => orchestrator.runCritic()),
+    agentStream("critic", (_req, sessionId) => {
+      return () => orchestrator.runCritic(sessionId);
+    }),
   );
 
   // ── Executor ────────────────────────────────────────────────────────────────
@@ -737,25 +832,43 @@ export function createServer(
   // POST /agents/executor/stream
   app.post(
     "/agents/executor",
-    agentJson("executor", () => () => orchestrator.runExecutor()),
+    agentJson("executor", (_req, sessionId) => {
+      return () => orchestrator.runExecutor(sessionId);
+    }),
   );
   app.post(
     "/agents/executor/stream",
-    agentStream("executor", () => () => orchestrator.runExecutor()),
+    agentStream("executor", (_req, sessionId) => {
+      return () => orchestrator.runExecutor(sessionId);
+    }),
   );
 
   // ── Blackboard memory dump ─────────────────────────────────────────────────
-  app.get("/memory", (_req: Request, res: Response): void => {
-    res.json(orchestrator.getMemory());
+  // GET /memory - returns memory for specific session if sessionId provided, otherwise all memory
+  app.get("/memory", (req: Request, res: Response): void => {
+    const sessionId = resolveSessionId(req, false);
+    res.setHeader("X-Session-Id", sessionId || "none");
+    if (sessionId) {
+      res.json({ sessionId, data: orchestrator.getMemory(sessionId) });
+      return;
+    }
+
+    res.json({ data: orchestrator.getMemory() });
   });
 
   // ── Cycle history ──────────────────────────────────────────────────────────
-  app.get("/history", (_req: Request, res: Response): void => {
+  // GET /history - returns history for specific session if sessionId provided
+  app.get("/history", (req: Request, res: Response): void => {
+    const sessionId = resolveSessionId(req, false);
+    res.setHeader("X-Session-Id", sessionId || "none");
     res.json(orchestrator.getHistory());
   });
 
   // ── Latest cycle ───────────────────────────────────────────────────────────
-  app.get("/latest", (_req: Request, res: Response): void => {
+  // GET /latest - returns latest cycle for specific session if sessionId provided
+  app.get("/latest", (req: Request, res: Response): void => {
+    const sessionId = resolveSessionId(req, false);
+    res.setHeader("X-Session-Id", sessionId || "none");
     const latest = orchestrator.getLatest();
     if (!latest) {
       res.status(404).json({ error: "No cycles run yet" });
@@ -814,8 +927,21 @@ export async function startServer(
     logger.info(
       `[API]   DRY_RUN=${cfg.DRY_RUN ? "true (no real trades)" : "⚠️  false — LIVE TRADING"}`,
     );
-    logger.info(`[API] A2A:`);
+    logger.info(`[API] A2A Orchestrator:`);
     logger.info(`[API]   GET  /.well-known/agent-card.json`);
     logger.info(`[API]   POST /a2a/jsonrpc   POST /a2a/rest`);
+    logger.info(`[API]   POST /a2a/route/stream`);
+
+    const agentRoutes = (
+      app as express.Application & { __agentRoutes?: unknown }
+    ).__agentRoutes as
+      | Array<{ route: string; agent: { cardName: string } }>
+      | undefined;
+    if (agentRoutes && agentRoutes.length > 0) {
+      logger.info(`[API] A2A Individual Agents (same port):`);
+      for (const { route, agent } of agentRoutes) {
+        logger.info(`[API]   ${route.padEnd(30)} → ${agent.cardName}`);
+      }
+    }
   });
 }

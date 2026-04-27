@@ -16,9 +16,15 @@ import type { ZGStorage } from "./ZGStorage";
 export class BlackboardMemory {
   private readonly cache = new Map<string, MemoryEntry>();
   private readonly storage: ZGStorage | null;
+  private readonly namespace: string | null;
 
-  constructor(storage?: ZGStorage) {
+  constructor(storage?: ZGStorage, namespace?: string) {
     this.storage = storage ?? null;
+    this.namespace = namespace ?? null;
+  }
+
+  private scopedKey(key: string): string {
+    return this.namespace ? `${this.namespace}/${key}` : key;
   }
 
   // ── Write ───────────────────────────────────────────────────────────────────
@@ -30,8 +36,9 @@ export class BlackboardMemory {
     value: unknown,
   ): Promise<MemoryEntry> {
     const json = JSON.stringify(value);
+    const storageKey = this.scopedKey(key);
     const hash = this.storage
-      ? await this.storage.store(agentId, key, value).catch(() => {
+      ? await this.storage.store(agentId, storageKey, value).catch(() => {
           const h = crypto.createHash("sha256").update(json).digest("hex");
           return `local:${h}`;
         })
@@ -47,7 +54,9 @@ export class BlackboardMemory {
     };
 
     this.cache.set(key, entry);
-    logger.info(`[Memory] ${role} wrote "${key}"  hash=${hash.slice(0, 20)}…`);
+    logger.info(
+      `[Memory${this.namespace ? `:${this.namespace}` : ""}] ${role} wrote "${key}"  hash=${hash.slice(0, 20)}…`,
+    );
     return entry;
   }
 

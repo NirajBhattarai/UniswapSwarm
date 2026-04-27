@@ -131,14 +131,8 @@ cp .env.example .env
 | `NEXT_PUBLIC_COPILOTKIT_RUNTIME_URL` | no              | Frontend → CopilotKit runtime URL (default: `/api/copilotkit`).                                           |
 | `NEXT_PUBLIC_ORCHESTRATOR_URL`       | no              | Frontend → orchestrator REST/A2A base URL (default: `http://localhost:4000`).                             |
 | `A2A_PUBLIC_BASE_URL`                | no              | Public URL embedded in agent cards. Defaults to `http://localhost:${PORT}`.                               |
-| `A2A_HOST`, `A2A_PUBLIC_HOST`        | no              | Bind address + public hostname for the six A2A servers. Useful when deploying remotely.                   |
-| `RESEARCHER_PORT`                    | no              | Port for the standalone Researcher A2A server (default: `4101`).                                          |
-| `PLANNER_PORT`                       | no              | Port for the standalone Planner A2A server (default: `4102`).                                             |
-| `RISK_PORT`                          | no              | Port for the standalone Risk A2A server (default: `4103`).                                                |
-| `STRATEGY_PORT`                      | no              | Port for the standalone Strategy A2A server (default: `4104`).                                            |
-| `CRITIC_PORT`                        | no              | Port for the standalone Critic A2A server (default: `4105`).                                              |
-| `EXECUTOR_PORT`                      | no              | Port for the standalone Executor A2A server (default: `4106`).                                            |
-| `RESEARCHER_AGENT_URL`, …            | no              | Per-agent URL overrides for the web app when the A2A servers do not live on the same host as the cockpit. |
+| `ORCHESTRATOR_URL`                   | no              | Base URL for A2A agent endpoints (default: `http://localhost:4000`). All agents are accessible as routes. |
+| `RESEARCHER_AGENT_URL`, etc.         | no              | Per-agent URL overrides for the web app. Defaults to `${ORCHESTRATOR_URL}/a2a/agents/<agent-id>`.         |
 
 ### 3. Fund the 0G Compute ledger
 
@@ -229,9 +223,12 @@ SwarmOrchestrationAgent (Gemini)
    ▼
 ┌──────────────┬────────────┬──────────────┬──────────────┬────────────┬──────────────┐
 │ Researcher   │ Planner    │ Risk         │ Strategy     │ Critic     │ Executor     │
-│ :4101        │ :4102      │ :4103        │ :4104        │ :4105      │ :4106        │
+│ Port 4000    │ Port 4000  │ Port 4000    │ Port 4000    │ Port 4000  │ Port 4000    │
+│ /a2a/agents/ │ /a2a/      │ /a2a/agents/ │ /a2a/agents/ │ /a2a/      │ /a2a/agents/ │
+│ researcher   │ agents/    │ risk         │ strategy     │ agents/    │ executor     │
+│              │ planner    │              │              │ critic     │              │
 └──────────────┴────────────┴──────────────┴──────────────┴────────────┴──────────────┘
-                       (each is a standalone A2A JSON-RPC server)
+       (all agents run on same port with route-based A2A JSON-RPC endpoints)
 ```
 
 ```sh
@@ -275,12 +272,8 @@ Required environment variables (see `.env.example`):
 ```env
 GOOGLE_GENERATIVE_AI_API_KEY=...   # or GOOGLE_API_KEY / GEMINI_API_KEY
 COPILOTKIT_MODEL=gemini-2.5-flash
-RESEARCHER_PORT=4101
-PLANNER_PORT=4102
-RISK_PORT=4103
-STRATEGY_PORT=4104
-CRITIC_PORT=4105
-EXECUTOR_PORT=4106
+# All agents run on port 4000 with route-based endpoints
+# ORCHESTRATOR_URL=http://localhost:4000  # optional override
 ```
 
 ---

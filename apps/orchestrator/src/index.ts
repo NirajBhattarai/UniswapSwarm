@@ -1,7 +1,6 @@
 import "dotenv/config";
 import { SwarmOrchestrator } from "./orchestrator";
 import { startServer } from "./server";
-import { startSwarmA2AAgentServers } from "./a2aAgents";
 import { logger, getConfig } from "@swarm/shared";
 
 async function main(): Promise<void> {
@@ -18,13 +17,11 @@ async function main(): Promise<void> {
   const orchestrator = new SwarmOrchestrator();
   await orchestrator.init();
 
-  // Start HTTP API (non-blocking) — legacy /cycle, /agents/*, /a2a/jsonrpc
+  // Start HTTP API with all endpoints on the same port:
+  // - Legacy /cycle, /agents/* routes
+  // - A2A orchestrator at /a2a/jsonrpc and /a2a/rest
+  // - Individual A2A agents at /a2a/agents/* (no longer separate ports)
   await startServer(orchestrator);
-
-  // Start one standalone A2A server per Uniswap Swarm agent. The CopilotKit
-  // A2A middleware in apps/web registers each of these URLs and the
-  // orchestrator LLM can reach any agent via `send_message_to_a2a_agent`.
-  await startSwarmA2AAgentServers(orchestrator);
 
   // Autonomous cycling is disabled by default.
   // Set AUTO_CYCLE_ENABLED=true to opt in.

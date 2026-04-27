@@ -22,15 +22,15 @@ import { logger } from "@swarm/shared";
 import type { SwarmOrchestrator } from "./orchestrator";
 
 /**
- * Each Uniswap Swarm agent is exposed as its own standalone A2A server, just
- * like the LangGraph + ADK agents in CopilotKit/a2a-travel.
+ * Each Uniswap Swarm agent is exposed as an A2A endpoint on the same port
+ * with different routes:
  *
- *   researcher  -> :4101
- *   planner     -> :4102
- *   risk        -> :4103
- *   strategy    -> :4104
- *   critic      -> :4105
- *   executor    -> :4106
+ *   researcher  -> /a2a/agents/researcher
+ *   planner     -> /a2a/agents/planner
+ *   risk        -> /a2a/agents/risk
+ *   strategy    -> /a2a/agents/strategy
+ *   critic      -> /a2a/agents/critic
+ *   executor    -> /a2a/agents/executor
  *
  * The CopilotKit web app's A2AMiddlewareAgent will register all these URLs
  * and the orchestrator LLM will route via the auto-injected
@@ -45,112 +45,91 @@ export type SwarmA2AAgentId =
   | "critic"
   | "executor";
 
-const HTTP_HOST = process.env.A2A_HOST ?? "0.0.0.0";
-
-const PORTS: Record<SwarmA2AAgentId, number> = {
-  researcher: Number(process.env.RESEARCHER_PORT ?? 4101),
-  planner: Number(process.env.PLANNER_PORT ?? 4102),
-  risk: Number(process.env.RISK_PORT ?? 4103),
-  strategy: Number(process.env.STRATEGY_PORT ?? 4104),
-  critic: Number(process.env.CRITIC_PORT ?? 4105),
-  executor: Number(process.env.EXECUTOR_PORT ?? 4106),
-};
-
-const PUBLIC_HOST = process.env.A2A_PUBLIC_HOST ?? `http://localhost`;
-
 export type AgentDescriptor = {
   id: SwarmA2AAgentId;
   /** Human-friendly card name. Must match what the orchestrator LLM is told. */
   cardName: string;
   description: string;
-  port: number;
-  url: string;
+  url?: string; // Will be set dynamically when routes are registered
   skillId: string;
   skillName: string;
   skillExamples: string[];
 };
 
-export const SWARM_AGENT_DESCRIPTORS: AgentDescriptor[] = (
-  [
-    {
-      id: "researcher",
-      cardName: "Researcher Agent",
-      description:
-        "Researches Uniswap V2/V3/V4 + UniswapX pools and returns ranked candidate trade tokens with live market data, narratives, and risk hints.",
-      skillId: "researcher",
-      skillName: "Token Researcher",
-      skillExamples: [
-        "Find safe trade candidates around ETH UNI ARB",
-        "Scan Uniswap pools for low-risk swap ideas",
-      ],
-    },
-    {
-      id: "planner",
-      cardName: "Planner Agent",
-      description:
-        "Builds a structured TradePlan (strategy, constraints, task graph) from the research candidates.",
-      skillId: "planner",
-      skillName: "Trade Planner",
-      skillExamples: [
-        "Plan a conservative swap based on the research report",
-        "Create a multi-step trade plan for ETH/USDC",
-      ],
-    },
-    {
-      id: "risk",
-      cardName: "Risk Agent",
-      description:
-        "Evaluates each candidate token for honeypots, ownership concentration, MEV exposure, liquidity, and outputs RiskAssessments.",
-      skillId: "risk",
-      skillName: "Risk Assessor",
-      skillExamples: [
-        "Score risk for the candidate tokens",
-        "Flag any unsafe tokens in the plan",
-      ],
-    },
-    {
-      id: "strategy",
-      cardName: "Strategy Agent",
-      description:
-        "Selects the highest-scoring safe candidate, sizes the position, picks the route, and emits an exact swap calldata spec (TradeStrategy).",
-      skillId: "strategy",
-      skillName: "Trade Strategy",
-      skillExamples: [
-        "Build the best concrete swap from approved tokens",
-        "Pick token-in/token-out, size and slippage",
-      ],
-    },
-    {
-      id: "critic",
-      cardName: "Critic Agent",
-      description:
-        "Reviews the assembled plan + strategy and approves/rejects with confidence + issues list.",
-      skillId: "critic",
-      skillName: "Trade Critic",
-      skillExamples: [
-        "Approve or reject the proposed trade",
-        "Audit the plan for issues",
-      ],
-    },
-    {
-      id: "executor",
-      cardName: "Executor Agent",
-      description:
-        "Executes (or simulates, when DRY_RUN=true) the approved swap via Uniswap SwapRouter02.",
-      skillId: "executor",
-      skillName: "Trade Executor",
-      skillExamples: [
-        "Execute the approved swap (dry-run by default)",
-        "Submit the trade and report tx hash",
-      ],
-    },
-  ] satisfies Omit<AgentDescriptor, "port" | "url">[]
-).map((entry) => ({
-  ...entry,
-  skillExamples: [...entry.skillExamples],
-  port: PORTS[entry.id],
-  url: `${PUBLIC_HOST}:${PORTS[entry.id]}`,
-}));
+export const SWARM_AGENT_DESCRIPTORS: AgentDescriptor[] = [
+  {
+    id: "researcher",
+    cardName: "Researcher Agent",
+    description:
+      "Researches Uniswap V2/V3/V4 + UniswapX pools and returns ranked candidate trade tokens with live market data, narratives, and risk hints.",
+    skillId: "researcher",
+    skillName: "Token Researcher",
+    skillExamples: [
+      "Find safe trade candidates around ETH UNI ARB",
+      "Scan Uniswap pools for low-risk swap ideas",
+    ],
+  },
+  {
+    id: "planner",
+    cardName: "Planner Agent",
+    description:
+      "Builds a structured TradePlan (strategy, constraints, task graph) from the research candidates.",
+    skillId: "planner",
+    skillName: "Trade Planner",
+    skillExamples: [
+      "Plan a conservative swap based on the research report",
+      "Create a multi-step trade plan for ETH/USDC",
+    ],
+  },
+  {
+    id: "risk",
+    cardName: "Risk Agent",
+    description:
+      "Evaluates each candidate token for honeypots, ownership concentration, MEV exposure, liquidity, and outputs RiskAssessments.",
+    skillId: "risk",
+    skillName: "Risk Assessor",
+    skillExamples: [
+      "Score risk for the candidate tokens",
+      "Flag any unsafe tokens in the plan",
+    ],
+  },
+  {
+    id: "strategy",
+    cardName: "Strategy Agent",
+    description:
+      "Selects the highest-scoring safe candidate, sizes the position, picks the route, and emits an exact swap calldata spec (TradeStrategy).",
+    skillId: "strategy",
+    skillName: "Trade Strategy",
+    skillExamples: [
+      "Build the best concrete swap from approved tokens",
+      "Pick token-in/token-out, size and slippage",
+    ],
+  },
+  {
+    id: "critic",
+    cardName: "Critic Agent",
+    description:
+      "Reviews the assembled plan + strategy and approves/rejects with confidence + issues list.",
+    skillId: "critic",
+    skillName: "Trade Critic",
+    skillExamples: [
+      "Approve or reject the proposed trade",
+      "Audit the plan for issues",
+    ],
+  },
+  {
+    id: "executor",
+    cardName: "Executor Agent",
+    description:
+      "Executes (or simulates, when DRY_RUN=true) the approved swap via Uniswap SwapRouter02.",
+    skillId: "executor",
+    skillName: "Trade Executor",
+    skillExamples: [
+      "Execute the approved swap (dry-run by default)",
+      "Submit the trade and report tx hash",
+    ],
+  },
+];
 
 export function getSwarmAgentDescriptors(): AgentDescriptor[] {
   return SWARM_AGENT_DESCRIPTORS;
@@ -182,23 +161,33 @@ class SwarmAgentExecutor implements AgentExecutor {
     eventBus: ExecutionEventBus,
   ): Promise<void> {
     const userText = extractUserText(requestContext);
+    // Use a simple hash of the first few chars of the contextId to create
+    // a semi-stable session that will likely be the same for related calls
+    // in a short time window. This is a heuristic approach.
+    const sessionId = extractStableSessionId(requestContext);
+
+    logger.info(
+      `[A2A] ${this.agent.cardName} called with sessionId=${sessionId} (contextId=${requestContext.contextId})`,
+    );
+
     // Capture timestamp BEFORE running so we can identify any memory entries
     // this agent wrote to 0G Storage during this run.
     const sinceTs = Date.now();
     const beforeKeys = new Set(
-      this.orchestrator.getMemory().map((entry) => entry.key),
+      this.orchestrator.getMemory(sessionId).map((entry) => entry.key),
     );
 
     let payload: unknown;
     let runError: string | undefined;
     try {
-      payload = await this.runAgent(userText);
+      payload = await this.runAgent(userText, sessionId);
     } catch (err) {
       runError = err instanceof Error ? err.message : String(err);
       payload = { error: `Agent ${this.agent.id} failed: ${runError}` };
+      logger.error(`[A2A] ${this.agent.cardName} error: ${runError}`);
     }
 
-    const writes = this.collectAgentWrites(sinceTs, beforeKeys);
+    const writes = this.collectAgentWrites(sessionId, sinceTs, beforeKeys);
 
     const response: Message = {
       kind: "message",
@@ -226,12 +215,13 @@ class SwarmAgentExecutor implements AgentExecutor {
    * where another runner overwrites the same slot.
    */
   private collectAgentWrites(
+    sessionId: string,
     sinceTs: number,
     beforeKeys: Set<string>,
   ): AgentStorageWrite[] {
     const prefix = `${this.agent.id}/`;
     return this.orchestrator
-      .getMemory()
+      .getMemory(sessionId)
       .filter((entry) => {
         if (!entry.key.startsWith(prefix)) return false;
         // Either the key is brand-new this run, or its timestamp is fresh
@@ -250,20 +240,20 @@ class SwarmAgentExecutor implements AgentExecutor {
 
   cancelTask = async (): Promise<void> => {};
 
-  private async runAgent(goal: string): Promise<unknown> {
+  private async runAgent(goal: string, sessionId: string): Promise<unknown> {
     switch (this.agent.id) {
       case "researcher":
-        return this.orchestrator.runResearcher(goal);
+        return this.orchestrator.runResearcher(sessionId, goal);
       case "planner":
-        return this.orchestrator.runPlanner(goal);
+        return this.orchestrator.runPlanner(sessionId, goal);
       case "risk":
-        return this.orchestrator.runRisk();
+        return this.orchestrator.runRisk(sessionId);
       case "strategy":
-        return this.orchestrator.runStrategy();
+        return this.orchestrator.runStrategy(sessionId);
       case "critic":
-        return this.orchestrator.runCritic();
+        return this.orchestrator.runCritic(sessionId);
       case "executor":
-        return this.orchestrator.runExecutor();
+        return this.orchestrator.runExecutor(sessionId);
     }
   }
 }
@@ -311,90 +301,98 @@ function extractUserText(requestContext: RequestContext): string {
   );
 }
 
+/**
+ * Extract a stable session ID. Since each A2A agent call gets a unique contextId
+ * and we can't easily pass custom headers through the A2A middleware, we use
+ * a simple heuristic: use "shared-session" for all agents to force memory sharing.
+ *
+ * This means all conversations share the same memory, which is fine for development
+ * but should be improved for production (e.g., by adding session management in the orchestrator).
+ */
+function extractStableSessionId(requestContext: RequestContext): string {
+  // For now, use a single shared session for all agents
+  // TODO: Implement proper session management based on user/conversation context
+  return "shared-session";
+}
+
 // ── Agent server bootstrap ───────────────────────────────────────────────────
 
 export type StartedAgentServer = {
   agent: AgentDescriptor;
-  port: number;
+  route: string;
   url: string;
   cardUrl: string;
 };
 
-export async function startSwarmA2AAgentServers(
+/**
+ * Register all Swarm A2A agent handlers on the same express app with different routes.
+ * Instead of separate ports (4101-4106), all agents are on the main port with routes like:
+ *   /a2a/agents/researcher
+ *   /a2a/agents/planner
+ *   /a2a/agents/risk
+ *   etc.
+ */
+export function registerSwarmA2AAgentRoutes(
+  app: express.Application,
   orchestrator: SwarmOrchestrator,
-): Promise<StartedAgentServer[]> {
+  baseUrl: string,
+): StartedAgentServer[] {
   const started: StartedAgentServer[] = [];
 
   for (const descriptor of SWARM_AGENT_DESCRIPTORS) {
-    const card: AgentCard = buildAgentCard(descriptor);
+    const route = `/a2a/agents/${descriptor.id}`;
+    const agentUrl = `${baseUrl}${route}`;
+
+    // Update descriptor URL to use the route-based URL
+    const updatedDescriptor = { ...descriptor, url: agentUrl };
+    const card: AgentCard = buildAgentCard(updatedDescriptor);
 
     const requestHandler = new DefaultRequestHandler(
       card,
       new InMemoryTaskStore(),
-      new SwarmAgentExecutor(orchestrator, descriptor),
+      new SwarmAgentExecutor(orchestrator, updatedDescriptor),
     );
-
-    const app = express();
-    app.use(express.json());
-    app.use((req, res, next) => {
-      res.setHeader("Access-Control-Allow-Origin", "*");
-      res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
-      res.setHeader(
-        "Access-Control-Allow-Headers",
-        "Content-Type, Authorization",
-      );
-      if (req.method === "OPTIONS") {
-        res.status(204).end();
-        return;
-      }
-      next();
-    });
 
     // Serve the agent card at both the new (>=0.3.x) and legacy (<=0.2.x)
     // well-known paths so we're compatible with whatever @a2a-js/sdk version
     // the consuming client (e.g. @ag-ui/a2a-middleware) was built against.
     const cardHandler = agentCardHandler({ agentCardProvider: requestHandler });
-    const cardPaths = Array.from(
-      new Set([
-        `/${AGENT_CARD_PATH}`,
-        "/.well-known/agent.json",
-        "/.well-known/agent-card.json",
-      ]),
-    );
+    const cardPaths = [
+      `${route}/${AGENT_CARD_PATH}`,
+      `${route}/.well-known/agent.json`,
+      `${route}/.well-known/agent-card.json`,
+    ];
+
     for (const path of cardPaths) {
       app.use(path, cardHandler);
     }
+
     app.use(
-      "/",
+      route,
       jsonRpcHandler({
         requestHandler,
         userBuilder: UserBuilder.noAuthentication,
       }),
     );
 
-    await new Promise<void>((resolve) => {
-      app.listen(descriptor.port, HTTP_HOST, () => {
-        logger.info(
-          `[A2A] ${descriptor.cardName} listening on ${descriptor.url} (cards: ${cardPaths
-            .map((p) => `${descriptor.url}${p}`)
-            .join(", ")})`,
-        );
-        resolve();
-      });
-    });
+    logger.info(
+      `[A2A] ${descriptor.cardName} registered at ${agentUrl} (cards: ${cardPaths.join(", ")})`,
+    );
 
     started.push({
       agent: descriptor,
-      port: descriptor.port,
-      url: descriptor.url,
-      cardUrl: `${descriptor.url}/${AGENT_CARD_PATH}`,
+      route,
+      url: agentUrl,
+      cardUrl: `${agentUrl}/${AGENT_CARD_PATH}`,
     });
   }
 
   return started;
 }
 
-function buildAgentCard(descriptor: AgentDescriptor): AgentCard {
+function buildAgentCard(
+  descriptor: AgentDescriptor & { url: string },
+): AgentCard {
   return {
     name: descriptor.cardName,
     description: descriptor.description,
