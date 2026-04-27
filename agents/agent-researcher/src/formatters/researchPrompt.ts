@@ -26,11 +26,22 @@ export function buildMarketDataText(
 ): string {
   if (marketData.size === 0) return "";
 
-  const lines = Array.from(marketData.entries()).map(
-    ([sym, d]) =>
-      `${sym}: price=$${(d.price_usd ?? 0).toFixed(4)} vol24h=$${((d.volume_24h_usd ?? 0) / 1e6).toFixed(1)}M chg24h=${(d.price_change_24h_pct ?? 0).toFixed(2)}% mcap=$${((d.market_cap_usd ?? 0) / 1e9).toFixed(2)}B`,
-  );
-  return `\nLive CoinGecko market data (24h):\n${lines.join("\n")}`;
+  const lines = Array.from(marketData.entries()).map(([sym, d]) => {
+    const parts = [
+      `${sym}: price=$${(d.price_usd ?? 0).toFixed(4)}`,
+      `vol24h=$${((d.volume_24h_usd ?? 0) / 1e6).toFixed(1)}M`,
+      `chg24h=${(d.price_change_24h_pct ?? 0).toFixed(2)}%`,
+    ];
+    if (d.price_change_7d_pct != null) {
+      parts.push(`chg7d=${d.price_change_7d_pct.toFixed(2)}%`);
+    }
+    if (d.price_change_30d_pct != null) {
+      parts.push(`chg30d=${d.price_change_30d_pct.toFixed(2)}%`);
+    }
+    parts.push(`mcap=$${((d.market_cap_usd ?? 0) / 1e9).toFixed(2)}B`);
+    return parts.join(" ");
+  });
+  return `\nLive market data (CoinGecko 24h + DeFi Llama 7d/30d):\n${lines.join("\n")}`;
 }
 
 export function buildNarrativeText(narrativeSignal: NarrativeSignal): string {
@@ -53,18 +64,22 @@ export function buildResearchPrompt(args: BuildResearchPromptArgs): string {
 
   // Keep the prompt compact for small-context models by sending only the most
   // decision-relevant fields and capping total rows.
-  const compactPools = pools.slice(0, 20).map((p) => ({
-    tokenAddress: p.tokenAddress,
-    tokenSymbol: p.tokenSymbol,
-    tokenName: p.tokenName,
-    baseTokenSymbol: p.baseTokenSymbol,
-    poolAddress: p.poolAddress,
-    protocol: p.protocol,
-    feePct: p.feePct,
-    currentPrice: p.currentPrice,
-    liquidityUSD: p.liquidityUSD,
-    priceLabel: p.priceLabel,
-  }));
+  // Sort by liquidityUSD descending so the LLM always sees the deepest pools first.
+  const compactPools = pools
+    .slice(0, 20)
+    .sort((a, b) => b.liquidityUSD - a.liquidityUSD)
+    .map((p) => ({
+      tokenAddress: p.tokenAddress,
+      tokenSymbol: p.tokenSymbol,
+      tokenName: p.tokenName,
+      baseTokenSymbol: p.baseTokenSymbol,
+      poolAddress: p.poolAddress,
+      protocol: p.protocol,
+      feePct: p.feePct,
+      currentPrice: p.currentPrice,
+      liquidityUSD: p.liquidityUSD,
+      priceLabel: p.priceLabel,
+    }));
 
   return [
     `Trading goal: ${goal}`,

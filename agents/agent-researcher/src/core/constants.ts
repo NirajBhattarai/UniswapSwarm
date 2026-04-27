@@ -224,17 +224,21 @@ export const SYMBOL_TO_COINGECKO_ID: Record<string, string> = {
 
 export const NARRATIVE_KEYWORDS: Record<NarrativeType, string[]> = {
   ai: [
-    "ai",
+    "ai token",
+    "ai coin",
+    "ai crypto",
     "artificial intelligence",
     "machine learning",
     "chatgpt",
     "gpt",
     "llm",
-    "fetch",
-    "render",
-    "graph",
-    "agent",
-    "neural",
+    "fetch.ai",
+    "render network",
+    "the graph",
+    "ai agent",
+    "neural network",
+    "rndr",
+    "fet",
   ],
   safe_haven: [
     "war",

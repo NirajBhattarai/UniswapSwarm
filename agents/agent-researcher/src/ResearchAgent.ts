@@ -5,6 +5,7 @@ import {
   getConfig,
   UNISWAP,
   UNISWAP_TRADE_API_BASE_URL,
+  isStablecoin,
 } from "@swarm/shared";
 import type { ResearchReport, TokenCandidate } from "@swarm/shared";
 import { ethers } from "ethers";
@@ -26,8 +27,10 @@ import {
 } from "./core";
 import {
   fetchCoinGeckoMarketData as fetchCoinGeckoMarketDataService,
+  fetchDefiLlamaHistoricalChanges,
   fetchNarrativeSignal,
   fetchOnChainPools,
+  populateLiquidityUSD,
 } from "./services";
 import {
   buildMarketDataText,
@@ -99,12 +102,28 @@ export class ResearchAgent {
       trendingCoinGeckoIds,
       trendingSymbols,
     } = poolsResult;
-    const narrativeSignal = await fetchNarrativeSignal(
-      this.browser,
-      trendingSymbols,
-    );
+    // Build address-by-symbol map for DeFi Llama from pool snapshots + known registry.
+    // Done here so the DeFi Llama fetch can run in parallel with narrativeSignal.
+    const addressBySymbol = new Map<string, string>();
+    for (const pool of pools) {
+      const sym = pool.tokenSymbol.toUpperCase();
+      if (!addressBySymbol.has(sym)) {
+        addressBySymbol.set(sym, pool.tokenAddress);
+      }
+    }
+    for (const [sym, def] of Object.entries(SYMBOL_TO_TOKEN)) {
+      if (!addressBySymbol.has(sym)) {
+        addressBySymbol.set(sym, def.address);
+      }
+    }
+
+    // Fetch narrative signal + DeFi Llama historical changes in parallel
+    const [narrativeSignal, historicalChanges] = await Promise.all([
+      fetchNarrativeSignal(this.browser, trendingSymbols),
+      fetchDefiLlamaHistoricalChanges(addressBySymbol),
+    ]);
     logger.info(
-      `[Researcher] Fetched ${pools.length} pools | narrative=${narrativeSignal.narrative} fearGreed=${narrativeSignal.fearGreedValue} trending=[${narrativeSignal.trendingTokens.join(",")}]`,
+      `[Researcher] Fetched ${pools.length} pools | narrative=${narrativeSignal.narrative} fearGreed=${narrativeSignal.fearGreedValue} trending=[${narrativeSignal.trendingTokens.join(",")}] | DeFi Llama history=${historicalChanges.size} tokens`,
     );
 
     // Fetch market data for all known symbols + trending tokens (using live CoinGecko IDs
@@ -117,6 +136,21 @@ export class ResearchAgent {
       allSymbols,
       trendingCoinGeckoIds,
     );
+
+    // Merge DeFi Llama 7d/30d historical changes into market data
+    for (const [sym, hist] of historicalChanges) {
+      const existing = marketData.get(sym);
+      if (existing) {
+        existing.price_change_7d_pct = hist.price_change_7d_pct;
+        existing.price_change_30d_pct = hist.price_change_30d_pct;
+      }
+    }
+
+    // Populate liquidityUSD now that market cap data is available for sanity-capping.
+    // Uniswap V3's L×√P formula inflates virtual reserves for concentrated positions;
+    // capping at 2% of market cap keeps pool rankings meaningful.
+    populateLiquidityUSD(pools, marketData);
+    pools.sort((a, b) => b.liquidityUSD - a.liquidityUSD);
 
     const cfg = getConfig();
     const context = this.memory.contextFor(ResearchAgent.MEMORY_KEY);
@@ -151,6 +185,18 @@ export class ResearchAgent {
       cfg.MIN_LIQUIDITY_USD,
     );
 
+    // Fallback: if the LLM returned fewer than 3 candidates, top up from the
+    // highest-liquidity non-stablecoin pools that aren't already in the list.
+    if (report.candidates.length < 3) {
+      report.candidates = this.topUpCandidates(
+        report.candidates,
+        pools,
+        marketData,
+        cfg.MIN_LIQUIDITY_USD,
+        3,
+      );
+    }
+
     await this.memory.write(
       ResearchAgent.MEMORY_KEY,
       this.id,
@@ -183,10 +229,18 @@ export class ResearchAgent {
     }
 
     const validated: TokenCandidate[] = [];
+    const seenSymbols = new Set<string>();
     let dropped = 0;
 
     for (const c of candidates) {
       const symbol = c.symbol.toUpperCase();
+
+      // Deduplicate — keep only the first occurrence of each symbol
+      if (seenSymbols.has(symbol)) {
+        dropped += 1;
+        continue;
+      }
+
       const pool = bestPoolBySymbol.get(symbol);
 
       // If we never quoted this symbol on-chain in this cycle, discard it.
@@ -222,6 +276,7 @@ export class ResearchAgent {
       }
 
       validated.push(fixed);
+      seenSymbols.add(symbol);
     }
 
     if (dropped > 0) {
@@ -231,6 +286,62 @@ export class ResearchAgent {
     }
 
     return validated;
+  }
+
+  /**
+   * Top-up candidates to `target` count using the highest-liquidity non-stablecoin
+   * pools not already present in the current candidate list.
+   */
+  private topUpCandidates(
+    existing: TokenCandidate[],
+    pools: PoolSnapshot[],
+    marketData: Map<string, CoinGeckoMarketData>,
+    minLiquidityUSD: number,
+    target: number,
+  ): TokenCandidate[] {
+    if (existing.length >= target) return existing;
+
+    const seenSymbols = new Set(existing.map((c) => c.symbol.toUpperCase()));
+    const sorted = [...pools]
+      .filter(
+        (p) =>
+          p.liquidityUSD >= minLiquidityUSD &&
+          !isStablecoin({ symbol: p.tokenSymbol, address: p.tokenAddress }),
+      )
+      .sort((a, b) => b.liquidityUSD - a.liquidityUSD);
+
+    const filled = [...existing];
+    for (const pool of sorted) {
+      if (filled.length >= target) break;
+      const sym = pool.tokenSymbol.toUpperCase();
+      if (seenSymbols.has(sym)) continue;
+      seenSymbols.add(sym);
+
+      const cg = marketData.get(sym);
+      filled.push({
+        address: this.toChecksumSafe(
+          SYMBOL_TO_TOKEN[sym]?.address ?? pool.tokenAddress,
+        ),
+        symbol: sym,
+        name: pool.tokenName || sym,
+        pairAddress: this.toChecksumSafe(pool.poolAddress),
+        baseToken: pool.baseTokenSymbol,
+        priceUSD: cg?.price_usd ?? pool.currentPrice,
+        liquidityUSD: pool.liquidityUSD,
+        volume24hUSD: cg?.volume_24h_usd ?? 0,
+        priceChange24hPct: cg?.price_change_24h_pct ?? 0,
+        poolFeeTier: pool.feePct,
+        txCount: 0,
+      });
+    }
+
+    if (filled.length > existing.length) {
+      logger.info(
+        `[Researcher] Topped up candidates from ${existing.length} → ${filled.length} (fallback pools)`,
+      );
+    }
+
+    return filled;
   }
 
   private toChecksumSafe(address: string): string {

@@ -118,6 +118,10 @@ export interface CoinGeckoMarketData {
   volume_24h_usd: number;
   price_change_24h_pct: number;
   market_cap_usd: number;
+  /** 7-day price change % from DeFi Llama (free, no key required) */
+  price_change_7d_pct?: number | null;
+  /** 30-day price change % from DeFi Llama (free, no key required) */
+  price_change_30d_pct?: number | null;
 }
 
 // ─── Price-fetching public contract ──────────────────────────────────────────

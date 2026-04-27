@@ -19,6 +19,9 @@ export async function fetchNarrativeSignal(
       : await fetchCoinGeckoTrending(browser);
 
   const allTitles = [...redditTitles, ...newsTitles];
+  logger.info(
+    `[Researcher][narrative] scoring ${allTitles.length} headlines (reddit:${redditTitles.length} ct:${newsTitles.length})`,
+  );
   const scores = scoreNarratives(allTitles);
   const winnerNarrative = selectWinningNarrative(scores, fearGreed.score);
   const finalHeadlines = pickNarrativeHeadlines(allTitles, winnerNarrative);
@@ -34,17 +37,34 @@ export async function fetchNarrativeSignal(
   };
 }
 
+/**
+ * Converts a keyword into a regex that matches whole words / phrases.
+ * e.g. "ai" → /\bai\b/i so it won't match inside "stain", "rain" etc.
+ */
+function kwToRegex(kw: string): RegExp {
+  const escaped = kw.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`\\b${escaped}\\b`, "i");
+}
+
 function scoreNarratives(headlines: string[]): Record<string, number> {
-  const lowered = headlines.map((t) => t.toLowerCase());
   const scores: Record<string, number> = {};
 
   for (const [name, keywords] of Object.entries(NARRATIVE_KEYWORDS)) {
     if (name === "neutral") continue;
-    scores[name] = lowered.reduce((acc, title) => {
-      const hits = keywords.filter((kw) => title.includes(kw)).length;
-      return acc + hits;
+    const regexes = keywords.map(kwToRegex);
+    const matchedHits: string[] = [];
+    scores[name] = headlines.reduce((acc, title) => {
+      const matched = keywords.filter((_, i) => regexes[i]!.test(title));
+      if (matched.length)
+        matchedHits.push(`"${matched.join(",")}" in: ${title.slice(0, 80)}`);
+      return acc + matched.length;
     }, 0);
+    if (scores[name]! > 0)
+      logger.info(
+        `[Researcher][narrative] ${name}=${scores[name]}: ${matchedHits.join(" | ")}`,
+      );
   }
+  logger.info(`[Researcher][narrative] scores: ${JSON.stringify(scores)}`);
 
   return scores;
 }

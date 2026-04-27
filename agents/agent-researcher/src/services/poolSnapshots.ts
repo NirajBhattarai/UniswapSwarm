@@ -8,6 +8,7 @@ import {
   WETH_DEF,
 } from "../core/constants";
 import type {
+  CoinGeckoMarketData,
   PoolSnapshot,
   QueryPair,
   UniswapAPIQuoteResponse,
@@ -111,9 +112,6 @@ export async function fetchOnChainPools(): Promise<OnChainPoolsResult> {
     );
     snapshots.push(...trendingSnapshots);
   }
-
-  populateLiquidityUSD(snapshots);
-  snapshots.sort((a, b) => b.liquidityUSD - a.liquidityUSD);
 
   if (snapshots.length === 0) {
     throw new Error(
@@ -275,11 +273,19 @@ function buildSnapshotFromQuote(
 
   const sqrtRaw = pool.sqrtRatioX96 ?? "0";
   const liquidityRaw = pool.liquidity ?? "0";
-  const sqrtPriceNum =
-    sqrtRaw !== "0" ? Number(BigInt(sqrtRaw)) / Number(2n ** 96n) : 0;
-  const virtualToken1Raw =
-    liquidityRaw !== "0" ? Number(BigInt(liquidityRaw)) * sqrtPriceNum : 0;
-  const virtualToken1 = virtualToken1Raw / 10 ** t1.decimals;
+  // Use BigInt arithmetic throughout to avoid IEEE-754 precision loss when
+  // liquidityRaw or sqrtRatioX96 exceed 2^53 (common for large V3 pools).
+  // Formula: virtualToken1 = floor(L × √P / 2^96) / 10^decimals
+  //        = floor(L × sqrtRatioX96 / (2^96 × 10^decimals))
+  let virtualToken1 = 0;
+  if (sqrtRaw !== "0" && liquidityRaw !== "0") {
+    try {
+      const scale = 2n ** 96n * 10n ** BigInt(t1.decimals);
+      virtualToken1 = Number((BigInt(liquidityRaw) * BigInt(sqrtRaw)) / scale);
+    } catch {
+      virtualToken1 = 0;
+    }
+  }
 
   const isInBase = BASE_SYMBOLS.has(pair.tokenIn.symbol);
   const tradeTok = isInBase ? pair.tokenOut : pair.tokenIn;
@@ -303,7 +309,18 @@ function buildSnapshotFromQuote(
   };
 }
 
-function populateLiquidityUSD(snapshots: PoolSnapshot[]): void {
+/**
+ * Populates `liquidityUSD` on every snapshot.
+ *
+ * When `marketData` is supplied, each token's estimate is additionally capped at
+ * `MARKET_CAP_LIQUIDITY_RATIO × marketCap`. Uniswap V3 concentrated liquidity
+ * inflates the L-based virtual-reserve estimate well beyond real TVL; the market-cap
+ * ceiling keeps rankings meaningful without requiring an extra subgraph call.
+ */
+export function populateLiquidityUSD(
+  snapshots: PoolSnapshot[],
+  marketData?: Map<string, CoinGeckoMarketData>,
+): void {
   const wethUSD = findWethUsdReferencePrice(snapshots);
   logger.debug(`[Researcher] WETH/USD reference price: $${wethUSD.toFixed(2)}`);
 
@@ -312,19 +329,33 @@ function populateLiquidityUSD(snapshots: PoolSnapshot[]): void {
     const estimated =
       basePriceUSD > 0 ? Math.round(s.virtualToken1 * basePriceUSD * 2) : 0;
 
-    // `sqrtRatioX96` + `liquidity` based TVL estimates can become wildly large
-    // for some routed quotes; clamp to keep rankings sane and avoid fake billions.
-    s.liquidityUSD = normalizeLiquidityUSD(estimated);
+    const mktCap = marketData?.get(s.tokenSymbol)?.market_cap_usd;
+    s.liquidityUSD = normalizeLiquidityUSD(estimated, mktCap);
     logger.debug(
       `[Researcher] ${s.tokenSymbol}/${s.baseTokenSymbol} (${s.protocol}) liquidityUSD=$${s.liquidityUSD.toLocaleString()}`,
     );
   }
 }
 
-function normalizeLiquidityUSD(value: number): number {
+// Absolute ceiling regardless of market cap — prevents any single token from
+// dominating rankings due to a formula artefact.
+const MAX_REASONABLE_LIQUIDITY_USD = 250_000_000;
+// Pool TVL in Uniswap V3 rarely exceeds ~2 % of a token's circulating market cap;
+// using market cap as a tighter ceiling prevents the L×√P virtual-reserve formula
+// from inflating concentrated-liquidity pools into the $250 M sentinel range.
+const MARKET_CAP_LIQUIDITY_RATIO = 0.02;
+
+function normalizeLiquidityUSD(value: number, marketCapUSD?: number): number {
   if (!Number.isFinite(value) || value <= 0) return 0;
-  const MAX_REASONABLE_LIQUIDITY_USD = 250_000_000;
-  return Math.min(Math.round(value), MAX_REASONABLE_LIQUIDITY_USD);
+  const marketCapCap =
+    marketCapUSD && marketCapUSD > 0
+      ? Math.round(marketCapUSD * MARKET_CAP_LIQUIDITY_RATIO)
+      : MAX_REASONABLE_LIQUIDITY_USD;
+  return Math.min(
+    Math.round(value),
+    marketCapCap,
+    MAX_REASONABLE_LIQUIDITY_USD,
+  );
 }
 
 function findWethUsdReferencePrice(snapshots: PoolSnapshot[]): number {
