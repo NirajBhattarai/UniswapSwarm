@@ -7,7 +7,13 @@
  * pattern from CopilotKit/a2a-travel.
  */
 
-import React from "react";
+import React, { useEffect, useMemo, useState } from "react";
+import { BrowserProvider, ethers } from "ethers";
+import {
+  useAppKit,
+  useAppKitAccount,
+  useAppKitProvider,
+} from "@reown/appkit/react";
 import {
   SWARM_PIPELINE_NODE_IDS,
   SWARM_PIPELINE_STAGE_ORDER,
@@ -199,7 +205,7 @@ export const SwarmPipelineStageBody: React.FC<{
     case SWARM_PIPELINE_NODE_IDS.executor:
       return (
         <>
-          <ExecutionCard data={execution} />
+          <ExecutionCard data={execution} strategy={strategy} />
           <StorageFooter writes={agentWrites} />
         </>
       );
@@ -415,6 +421,28 @@ const normaliseFlags = (
 const formatFlagType = (type: string): string =>
   type.replace(/_/g, " ").toLowerCase();
 
+const URL_REGEX = /(https?:\/\/[^\s]+)/g;
+
+const renderWithLinks = (text: string): React.ReactNode[] => {
+  const parts = text.split(URL_REGEX);
+  return parts.map((part, idx) => {
+    if (/^https?:\/\//.test(part)) {
+      return (
+        <a
+          key={`url-${idx}-${part}`}
+          href={part}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="underline decoration-dotted underline-offset-2 hover:decoration-solid"
+        >
+          {part}
+        </a>
+      );
+    }
+    return <React.Fragment key={`txt-${idx}`}>{part}</React.Fragment>;
+  });
+};
+
 const RiskCard: React.FC<{ data?: RiskData }> = ({ data }) => {
   if (!data) {
     return (
@@ -499,7 +527,7 @@ const RiskCard: React.FC<{ data?: RiskData }> = ({ data }) => {
                         </span>
                         {flag.detail && (
                           <span className="mt-0.5 block text-slate-700">
-                            {flag.detail}
+                            {renderWithLinks(flag.detail)}
                           </span>
                         )}
                       </li>
@@ -515,7 +543,7 @@ const RiskCard: React.FC<{ data?: RiskData }> = ({ data }) => {
 
                 {reason && (
                   <p className="mt-1 text-[11px] leading-snug text-slate-600">
-                    {reason}
+                    {renderWithLinks(reason)}
                   </p>
                 )}
               </li>
@@ -605,9 +633,7 @@ const CritiqueCard: React.FC<{ data?: CritiqueData }> = ({ data }) => {
       {typeof data.confidence === "number" && (
         <p className="text-xs text-slate-700">
           Confidence:{" "}
-          <span className="font-semibold">
-            {Math.round(data.confidence * 100)}%
-          </span>
+          <span className="font-semibold">{Math.round(data.confidence)}%</span>
         </p>
       )}
       {data.notes && (
@@ -624,7 +650,138 @@ const CritiqueCard: React.FC<{ data?: CritiqueData }> = ({ data }) => {
   );
 };
 
-const ExecutionCard: React.FC<{ data?: ExecutionData }> = ({ data }) => {
+type WalletBalanceItem = {
+  symbol: string;
+  address: string;
+  decimals: number;
+  balance: string;
+  rawBalance: string;
+};
+
+type WalletPortfolio = {
+  address: string;
+  balances: WalletBalanceItem[];
+  nonZeroBalances: WalletBalanceItem[];
+};
+
+const ExecutionCard: React.FC<{
+  data?: ExecutionData;
+  strategy?: StrategyData;
+}> = ({ data, strategy }) => {
+  const { open } = useAppKit();
+  const { address, isConnected } = useAppKitAccount();
+  const { walletProvider } = useAppKitProvider("eip155");
+  const [portfolio, setPortfolio] = useState<WalletPortfolio | null>(null);
+  const [swapOpen, setSwapOpen] = useState(false);
+  const [selectedToken, setSelectedToken] = useState<string>("");
+  const [amount, setAmount] = useState<string>("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [txHash, setTxHash] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!isConnected || !address) {
+      setPortfolio(null);
+      setSelectedToken("");
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(
+          `/api/wallet/portfolio?address=${encodeURIComponent(address)}`,
+        );
+        if (!res.ok) return;
+        const payload = (await res.json()) as WalletPortfolio;
+        if (cancelled) return;
+        setPortfolio(payload);
+        const first = payload.nonZeroBalances[0];
+        if (first && !selectedToken) {
+          setSelectedToken(first.address);
+          const suggested = Math.max(Number(first.balance) * 0.2, 0);
+          setAmount(suggested > 0 ? suggested.toFixed(6) : "");
+        }
+      } catch {
+        // Non-fatal in UI
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isConnected, address]);
+
+  const tokenOptions = portfolio?.nonZeroBalances ?? [];
+  const chosen = useMemo(
+    () => tokenOptions.find((t) => t.address === selectedToken),
+    [tokenOptions, selectedToken],
+  );
+  const tokenOutAddress = strategy?.tokenOut;
+  const tokenOutSymbol = strategy?.tokenOutSymbol ?? "target token";
+
+  const canSwap =
+    Boolean(chosen) &&
+    Boolean(tokenOutAddress) &&
+    Boolean(amount) &&
+    Number(amount) > 0 &&
+    !submitting;
+
+  async function onSwapNow() {
+    if (!chosen || !tokenOutAddress || !address || !walletProvider) return;
+    try {
+      setSubmitting(true);
+      setError(null);
+      setTxHash(null);
+
+      const amountInWei = ethers.parseUnits(amount, chosen.decimals).toString();
+      const prepareRes = await fetch("/api/swap/prepare", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          walletAddress: address,
+          tokenIn: chosen.address,
+          tokenOut: tokenOutAddress,
+          amountInWei,
+          slippagePct: strategy?.slippagePct ?? 1.5,
+        }),
+      });
+      const payload = (await prepareRes.json()) as {
+        approvalTx?: { to: string; data: string; value?: string } | null;
+        swapTx?: { to: string; data: string; value?: string };
+        error?: string;
+      };
+      if (!prepareRes.ok || !payload.swapTx) {
+        throw new Error(payload.error ?? "Swap preparation failed");
+      }
+
+      const provider = new BrowserProvider(walletProvider as any);
+      const signer = await provider.getSigner();
+
+      if (payload.approvalTx) {
+        const approvalTx = await signer.sendTransaction({
+          to: payload.approvalTx.to,
+          data: payload.approvalTx.data,
+          value: payload.approvalTx.value
+            ? BigInt(payload.approvalTx.value)
+            : BigInt(0),
+        });
+        await approvalTx.wait();
+      }
+
+      const swapTx = await signer.sendTransaction({
+        to: payload.swapTx.to,
+        data: payload.swapTx.data,
+        value: payload.swapTx.value ? BigInt(payload.swapTx.value) : BigInt(0),
+      });
+      await swapTx.wait();
+      setTxHash(swapTx.hash);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Swap failed");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
   if (!data) {
     return (
       <div className="rounded-xl border border-green-100 bg-green-50/40 p-3">
@@ -663,6 +820,94 @@ const ExecutionCard: React.FC<{ data?: ExecutionData }> = ({ data }) => {
       )}
       {data.rationale && (
         <p className="mt-1 text-xs text-slate-600">{data.rationale}</p>
+      )}
+      {!data.success && strategy?.tokenOut && (
+        <button
+          type="button"
+          onClick={() => {
+            if (!isConnected) {
+              open();
+              return;
+            }
+            setSwapOpen(true);
+          }}
+          className="mt-2 w-full rounded-md bg-emerald-600 px-2 py-1.5 text-[11px] font-semibold text-white hover:bg-emerald-700"
+        >
+          {isConnected ? "Open Swap" : "Connect Wallet to Swap"}
+        </button>
+      )}
+      {swapOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-md rounded-xl bg-white p-4 shadow-xl">
+            <div className="mb-2 flex items-center justify-between">
+              <p className="text-sm font-semibold text-slate-900">
+                Swap on Uniswap
+              </p>
+              <button
+                type="button"
+                className="text-xs text-slate-500 hover:text-slate-700"
+                onClick={() => setSwapOpen(false)}
+              >
+                Close
+              </button>
+            </div>
+            <p className="mb-3 text-xs text-slate-600">
+              Select a wallet asset to swap into {tokenOutSymbol}.
+            </p>
+            <label className="mb-1 block text-[11px] font-semibold text-slate-600">
+              From asset
+            </label>
+            <select
+              value={selectedToken}
+              onChange={(e) => setSelectedToken(e.target.value)}
+              className="mb-3 w-full rounded-md border border-slate-300 px-2 py-2 text-xs"
+            >
+              {tokenOptions.length === 0 ? (
+                <option value="">No non-zero assets found</option>
+              ) : (
+                tokenOptions.map((t) => (
+                  <option key={t.address} value={t.address}>
+                    {t.symbol} ({Number(t.balance).toFixed(6)})
+                  </option>
+                ))
+              )}
+            </select>
+            <label className="mb-1 block text-[11px] font-semibold text-slate-600">
+              Amount
+            </label>
+            <input
+              type="number"
+              min="0"
+              step="any"
+              value={amount}
+              onChange={(e) => setAmount(e.target.value)}
+              className="mb-3 w-full rounded-md border border-slate-300 px-2 py-2 text-xs"
+              placeholder="0.0"
+            />
+            {error && (
+              <p className="mb-2 rounded-md border border-rose-300 bg-rose-50 px-2 py-1 text-[11px] text-rose-700">
+                {error}
+              </p>
+            )}
+            {txHash && (
+              <p className="mb-2 break-all rounded-md border border-emerald-300 bg-emerald-50 px-2 py-1 font-mono text-[11px] text-emerald-700">
+                {txHash}
+              </p>
+            )}
+            <button
+              type="button"
+              disabled={!canSwap}
+              onClick={onSwapNow}
+              className={`w-full rounded-md px-2 py-2 text-xs font-semibold text-white ${
+                canSwap
+                  ? "bg-emerald-600 hover:bg-emerald-700"
+                  : "cursor-not-allowed bg-slate-300"
+              }`}
+            >
+              {submitting ? "Waiting for wallet signature..." : "Sign & Swap"}
+            </button>
+          </div>
+        </div>
       )}
     </div>
   );

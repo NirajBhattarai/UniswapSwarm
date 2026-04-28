@@ -1,12 +1,14 @@
 "use client";
 
 import { CopilotKit } from "@copilotkit/react-core";
+import { ensureAppKitInit } from "../lib/reown";
 
 type ProvidersProps = {
   children: React.ReactNode;
 };
 
 export function Providers({ children }: ProvidersProps) {
+  ensureAppKitInit();
   const runtimeUrl =
     process.env.NEXT_PUBLIC_COPILOTKIT_RUNTIME_URL ?? "/api/copilotkit";
 

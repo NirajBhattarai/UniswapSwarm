@@ -14,6 +14,8 @@ interface TradeApprovalCardProps {
   critique: CritiqueData | null;
   isApproved: boolean;
   isRejected: boolean;
+  isSubmitting?: boolean;
+  error?: string | null;
   onApprove: () => void;
   onReject: () => void;
 }
@@ -31,6 +33,8 @@ export const TradeApprovalCard: React.FC<TradeApprovalCardProps> = ({
   critique,
   isApproved,
   isRejected,
+  isSubmitting = false,
+  error = null,
   onApprove,
   onReject,
 }) => {
@@ -124,9 +128,7 @@ export const TradeApprovalCard: React.FC<TradeApprovalCardProps> = ({
               Critic: {critique.approved ? "approved" : "needs revision"}
             </span>
             {typeof critique.confidence === "number" && (
-              <span>
-                confidence {Math.round((critique.confidence ?? 0) * 100)}%
-              </span>
+              <span>confidence {Math.round(critique.confidence ?? 0)}%</span>
             )}
           </div>
           {critique.notes && <p className="mt-1 text-xs">{critique.notes}</p>}
@@ -145,32 +147,45 @@ export const TradeApprovalCard: React.FC<TradeApprovalCardProps> = ({
           ❌ You rejected the swap. The orchestrator will not execute.
         </div>
       )}
+      {error && (
+        <div className="mb-3 rounded-lg border border-rose-300 bg-rose-50 p-2 text-xs text-rose-800">
+          ⚠ {error}
+        </div>
+      )}
 
       <div className="flex gap-2">
         <button
           type="button"
           onClick={onApprove}
-          disabled={isApproved || isRejected}
+          disabled={isApproved || isRejected || isSubmitting}
           className={`flex-1 rounded-lg py-2 text-xs font-semibold ${
             isApproved
               ? "cursor-not-allowed bg-emerald-600 text-white"
               : isRejected
                 ? "cursor-not-allowed bg-slate-300 text-slate-600"
-                : "bg-emerald-600 text-white hover:bg-emerald-700"
+                : isSubmitting
+                  ? "cursor-not-allowed bg-emerald-400 text-white"
+                  : "bg-emerald-600 text-white hover:bg-emerald-700"
           }`}
         >
-          {isApproved ? "✓ Approved" : "Approve & execute"}
+          {isApproved
+            ? "✓ Approved"
+            : isSubmitting
+              ? "Awaiting signature…"
+              : "Approve & execute"}
         </button>
         <button
           type="button"
           onClick={onReject}
-          disabled={isApproved || isRejected}
+          disabled={isApproved || isRejected || isSubmitting}
           className={`flex-1 rounded-lg py-2 text-xs font-semibold ${
             isRejected
               ? "cursor-not-allowed bg-orange-500 text-white"
               : isApproved
                 ? "cursor-not-allowed bg-slate-300 text-slate-600"
-                : "bg-orange-500 text-white hover:bg-orange-600"
+                : isSubmitting
+                  ? "cursor-not-allowed bg-slate-300 text-slate-600"
+                  : "bg-orange-500 text-white hover:bg-orange-600"
           }`}
         >
           {isRejected ? "✗ Rejected" : "Reject"}

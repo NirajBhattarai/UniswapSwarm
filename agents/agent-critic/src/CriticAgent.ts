@@ -34,7 +34,7 @@ IMPORTANT: Set approved=false if ANY of these are true:
 - Strategy proposes trading unverified tokens
 - Expected profit < estimated gas cost
 - Slippage tolerance seems too high for the liquidity
-- Any critical risk flags were found
+- Critical risk flags were found for the SELECTED strategy token
 - The strategy is a stablecoin → stablecoin swap (USDC↔USDT, DAI↔USDC,
   USDC↔FRAX, etc.). These are 1:1 trades with zero economic upside and
   must always be rejected.`;
@@ -111,14 +111,21 @@ export class CriticAgent {
       { maxTokens: 1024, ...opts },
     );
 
-    // Hard override: if any critical risk flag exists, force rejection
-    const hasCritical = assessments.some((a) =>
-      a.flags.some((f) => f.severity === "critical"),
+    // Hard override: only veto when the selected strategy token itself has
+    // critical risk flags. Other candidates may be risky and still should not
+    // block execution if they were not selected.
+    const selectedAssessment = assessments.find(
+      (a) =>
+        a.tokenAddress.toLowerCase() === strategy.tokenOut.toLowerCase() ||
+        a.symbol.toUpperCase() === strategy.tokenOutSymbol.toUpperCase(),
     );
-    if (hasCritical) {
+    const selectedCriticalFlags = (selectedAssessment?.flags ?? []).filter(
+      (f) => f.severity === "critical",
+    );
+    if (selectedCriticalFlags.length > 0) {
       critique.approved = false;
       critique.issues.unshift(
-        "HARD VETO: Critical risk flag found in assessments",
+        `HARD VETO: Selected token ${strategy.tokenOutSymbol} has critical risk flags`,
       );
     }
 

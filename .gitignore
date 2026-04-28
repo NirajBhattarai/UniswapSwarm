@@ -27,6 +27,10 @@ out/
 build
 dist
 
+# Prevent JS files in TypeScript src directories
+agents/*/src/**/*.js
+packages/*/src/**/*.js
+
 
 # Debug
 npm-debug.log*

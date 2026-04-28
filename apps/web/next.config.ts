@@ -11,6 +11,30 @@ const nextConfig: NextConfig = {
   turbopack: {
     root: monorepoRoot,
   },
+  webpack: (config) => {
+    const ignoredWarnings: RegExp[] = [
+      /Critical dependency: the request of a dependency is an expression/,
+    ];
+
+    const ignoredModules: RegExp[] = [
+      /node_modules[\\/]\.pnpm[\\/](ox|viem)@/,
+      /node_modules[\\/]@whatwg-node[\\/]fetch[\\/]dist[\\/]node-ponyfill/,
+    ];
+
+    const existing = config.ignoreWarnings ?? [];
+    config.ignoreWarnings = [
+      ...existing,
+      (warning: { message?: string; module?: { resource?: string } }) => {
+        const message = warning.message ?? "";
+        const resource = warning.module?.resource ?? "";
+        return (
+          ignoredWarnings.some((r) => r.test(message)) &&
+          ignoredModules.some((r) => r.test(resource))
+        );
+      },
+    ];
+    return config;
+  },
 };
 
 export default nextConfig;

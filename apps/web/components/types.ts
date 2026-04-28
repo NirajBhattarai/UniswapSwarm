@@ -102,11 +102,17 @@ export type RiskAssessment = {
 export type RiskData = RiskAssessment[];
 
 export type StrategyData = {
+  type?: "buy" | "sell" | "swap";
+  tokenIn?: string;
+  tokenOut?: string;
   tokenInSymbol?: string;
   tokenOutSymbol?: string;
   amountInUsd?: number;
+  amountInWei?: string;
+  minAmountOutWei?: string;
   amountIn?: string;
   slippagePct?: number;
+  poolFee?: number;
   feeTier?: number;
   chain?: string;
   rationale?: string;

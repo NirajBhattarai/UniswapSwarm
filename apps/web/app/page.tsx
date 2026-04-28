@@ -1,13 +1,22 @@
 "use client";
 
 import { useState } from "react";
+import { useAppKitAccount } from "@reown/appkit/react";
 import { SwarmAgentOutputs } from "../components/SwarmAgentOutputs";
 import { SwarmChat } from "../components/swarm-chat";
+import { WalletConnectButton } from "../components/wallet/WalletConnectButton";
 import { SWARM_AGENTS } from "../lib/swarm-agents";
 import type { SwarmAggregateState } from "../components/types";
 
+function shortAddress(address?: string): string {
+  if (!address) return "";
+  if (address.length < 10) return address;
+  return `${address.slice(0, 6)}…${address.slice(-4)}`;
+}
+
 export default function Home() {
   const [state, setState] = useState<SwarmAggregateState>({});
+  const { isConnected, address } = useAppKitAccount();
 
   return (
     // h-screen + overflow-hidden caps the page at one viewport so a long
@@ -22,9 +31,19 @@ export default function Home() {
         {/* ── Chat column ───────────────────────────────────────────────── */}
         <section className="flex h-full w-full max-w-[520px] min-h-0 flex-shrink-0 flex-col overflow-hidden rounded-2xl border-2 border-white bg-white/65 shadow-[0_24px_70px_rgba(27,35,57,0.18)] backdrop-blur-md">
           <div className="border-b border-[#d9dbe5] px-6 py-5">
-            <h1 className="text-2xl font-semibold text-[#0b1021]">
-              Uniswap Swarm
-            </h1>
+            <div className="flex items-center justify-between gap-3">
+              <h1 className="text-2xl font-semibold text-[#0b1021]">
+                Uniswap Swarm
+              </h1>
+              <div className="flex items-center gap-2">
+                {isConnected && (
+                  <span className="rounded-full border border-emerald-300 bg-emerald-50 px-2.5 py-1 text-[11px] font-semibold text-emerald-700">
+                    {shortAddress(address)}
+                  </span>
+                )}
+                <WalletConnectButton />
+              </div>
+            </div>
             <p className="mt-1 text-sm text-[#57575b]">
               CopilotKit A2A multi-agent cockpit
             </p>
@@ -51,7 +70,24 @@ export default function Home() {
             scroll its internal message list without growing this column.
           */}
           <div className="flex min-h-0 flex-1 flex-col overflow-hidden p-3">
-            <SwarmChat state={state} onState={setState} />
+            {isConnected ? (
+              <SwarmChat state={state} onState={setState} />
+            ) : (
+              <div className="flex h-full items-center justify-center rounded-xl border border-dashed border-slate-300 bg-white/60 p-6 text-center">
+                <div>
+                  <p className="text-sm font-semibold text-slate-800">
+                    Connect wallet to use Swarm Chat
+                  </p>
+                  <p className="mt-1 text-xs text-slate-500">
+                    For security, only connected wallets can access chat and
+                    execute swap approvals.
+                  </p>
+                  <div className="mt-4 flex justify-center">
+                    <WalletConnectButton />
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         </section>
 

@@ -5,6 +5,7 @@
  * pass-through to avoid 404s.
  */
 
-import { POST as RootPost } from "../route";
+import { GET as RootGet, POST as RootPost } from "../route";
 
+export const GET = RootGet;
 export const POST = RootPost;

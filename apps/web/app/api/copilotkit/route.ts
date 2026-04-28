@@ -52,7 +52,7 @@ AVAILABLE AGENTS (call by exact name with send_message_to_a2a_agent):
   - "Risk Agent"       : flags honeypots, ownership, MEV, liquidity issues
   - "Strategy Agent"   : picks the safest highest-scoring candidate, builds swap calldata spec
   - "Critic Agent"     : approves or rejects the plan + strategy with confidence
-  - "Executor Agent"   : executes the swap (or simulates when DRY_RUN=true)
+  - "Executor Agent"   : legacy backend executor (avoid when user wallet signing is available)
 
 DEFAULT WORKFLOW (the user asked for end-to-end trade analysis/execution):
   Run agents ONE AT A TIME in strict sequence. Wait for each result before
@@ -83,8 +83,9 @@ DEFAULT WORKFLOW (the user asked for end-to-end trade analysis/execution):
      user to approve or reject. THIS is the place where the user reviews the
      trade — not earlier.
 
-  7. If approved → Executor Agent — execute (or simulate) the swap.
-     ✓ After Executor returns, the pipeline is COMPLETE.
+  7. If approved, the frontend handles wallet signing + send from the user's
+     connected wallet (Reown). Do NOT call Executor Agent after approval unless
+     the user explicitly asks for backend simulation/executor mode.
 
 WHEN TO USE \`gather_swap_intent\` (RARE):
   ONLY call \`gather_swap_intent\` when the user's message is genuinely empty
@@ -125,7 +126,9 @@ CRITICAL RULES:
 - Default behaviour for any non-greeting input: jump straight to Researcher
   Agent when intent is broad/underspecified. Never call \`gather_swap_intent\`
   defensively.
-- Always call \`request_trade_approval\` before \`Executor Agent\`. Never skip it.
+- Always call \`request_trade_approval\` before any execution.
+- After \`request_trade_approval\` returns approved=true with a tx hash, treat
+  execution as COMPLETE and do NOT call Executor Agent again.
 - Call tools strictly one at a time, wait for the result before the next call.
 - After execution, summarise the full pipeline for the user (route, slippage,
   approval verdict, dry-run flag, tx hash if any).
@@ -168,7 +171,7 @@ HOW TO WRITE THE \`task\` ARGUMENT (USER-VISIBLE — DO NOT IGNORE):
   fresh directive — never echo or forward the JSON.
 `;
 
-export async function POST(request: NextRequest) {
+async function handleCopilotRequest(request: NextRequest) {
   const apiKey = resolveGeminiKey();
   if (!apiKey) {
     return new Response(
@@ -245,6 +248,9 @@ export async function POST(request: NextRequest) {
 
   return handleRequest(request);
 }
+
+export const GET = handleCopilotRequest;
+export const POST = handleCopilotRequest;
 
 const CARD_PATHS = [".well-known/agent.json", ".well-known/agent-card.json"];
 

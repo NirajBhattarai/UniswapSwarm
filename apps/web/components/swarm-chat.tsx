@@ -12,10 +12,16 @@
  */
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { BrowserProvider } from "ethers";
 import {
   useCopilotAction,
   useCopilotChatInternal,
 } from "@copilotkit/react-core";
+import {
+  useAppKit,
+  useAppKitAccount,
+  useAppKitProvider,
+} from "@reown/appkit/react";
 import { CopilotChat } from "@copilotkit/react-ui";
 import "@copilotkit/react-ui/styles.css";
 
@@ -42,6 +48,33 @@ type SwarmChatProps = {
 };
 
 type ApprovalState = { approved: boolean; rejected: boolean };
+type ApprovalErrorState = Record<string, string | null>;
+type ApprovalSubmittingState = Record<string, boolean>;
+
+type TxRequestLike = {
+  to: string;
+  data: string;
+  value?: string;
+};
+
+type SwapPrepareResponse = {
+  approvalTx: TxRequestLike | null;
+  swapTx: TxRequestLike;
+  quote?: Record<string, unknown>;
+};
+
+type WalletBalanceItem = {
+  symbol: string;
+  address: string;
+  balance: string;
+  rawBalance: string;
+};
+
+type WalletPortfolio = {
+  address: string;
+  balances: WalletBalanceItem[];
+  nonZeroBalances: WalletBalanceItem[];
+};
 
 /** Parse a JSON-encoded string argument; returns null on bad/empty input. */
 function parseJsonArg<T>(raw: unknown): T | null {
@@ -153,6 +186,36 @@ export const SwarmChat: React.FC<SwarmChatProps> = ({ state, onState }) => {
   const [approvalStates, setApprovalStates] = useState<
     Record<string, ApprovalState>
   >({});
+  const [approvalErrors, setApprovalErrors] = useState<ApprovalErrorState>({});
+  const [approvalSubmitting, setApprovalSubmitting] =
+    useState<ApprovalSubmittingState>({});
+  const [portfolio, setPortfolio] = useState<WalletPortfolio | null>(null);
+  const { open } = useAppKit();
+  const { address, isConnected } = useAppKitAccount();
+  const { walletProvider } = useAppKitProvider("eip155");
+
+  useEffect(() => {
+    if (!isConnected || !address) {
+      setPortfolio(null);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(
+          `/api/wallet/portfolio?address=${encodeURIComponent(address)}`,
+        );
+        if (!res.ok) return;
+        const payload = (await res.json()) as WalletPortfolio;
+        if (!cancelled) setPortfolio(payload);
+      } catch {
+        // Non-fatal: strategy can still run without wallet balances.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isConnected, address]);
 
   // Track the latest user prompt as the "intent" for the sidebar header.
   useEffect(() => {
@@ -251,9 +314,39 @@ export const SwarmChat: React.FC<SwarmChatProps> = ({ state, onState }) => {
       }
     }
 
+    if (next.strategy && !next.execution && isConnected) {
+      next.execution = {
+        success: false,
+        dryRun: false,
+        txHash: null,
+        pair:
+          next.strategy.tokenInSymbol && next.strategy.tokenOutSymbol
+            ? `${next.strategy.tokenInSymbol} → ${next.strategy.tokenOutSymbol}`
+            : undefined,
+        rationale:
+          "Swap is ready for wallet signature in the approval card (user-signed flow).",
+      };
+      dirty = true;
+    }
+
     if (dirty) onState(next);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [messagesSignature]);
+  }, [messagesSignature, isConnected]);
+
+  const walletContextSnippet = useMemo(() => {
+    if (!isConnected || !address) {
+      return "Wallet status: not connected.";
+    }
+    const nonZero = portfolio?.nonZeroBalances ?? [];
+    const holdings =
+      nonZero.length > 0
+        ? nonZero
+            .slice(0, 8)
+            .map((b) => `${Number(b.balance).toFixed(6)} ${b.symbol}`)
+            .join(", ")
+        : "no tracked token balances found";
+    return `Connected wallet: ${address}. Holdings snapshot: ${holdings}. Prefer strategy tokenIn from held assets with non-zero balance.`;
+  }, [isConnected, address, portfolio]);
 
   // Append fresh 0G Storage writes pushed up by MessageFromA2A. The audit
   // context handles dedupe internally, so we just concat here.
@@ -381,15 +474,118 @@ export const SwarmChat: React.FC<SwarmChatProps> = ({ state, onState }) => {
           rejected: false,
         };
 
-        const handleApprove = () => {
-          setApprovalStates((prev) => ({
-            ...prev,
-            [key]: { approved: true, rejected: false },
-          }));
-          respond?.({
-            approved: true,
-            message: "Trade approved by user. Executor may proceed.",
-          });
+        const handleApprove = async () => {
+          if (
+            !strategy?.tokenIn ||
+            !strategy?.tokenOut ||
+            !strategy?.amountInWei
+          ) {
+            setApprovalErrors((prev) => ({
+              ...prev,
+              [key]:
+                "Strategy payload is incomplete (tokenIn/tokenOut/amountInWei missing).",
+            }));
+            respond?.({
+              approved: false,
+              message:
+                "Approval failed: strategy payload missing on-chain swap fields.",
+            });
+            return;
+          }
+          if (!isConnected || !address || !walletProvider) {
+            setApprovalErrors((prev) => ({
+              ...prev,
+              [key]: "Connect your wallet first to sign this swap.",
+            }));
+            open();
+            return;
+          }
+
+          setApprovalSubmitting((prev) => ({ ...prev, [key]: true }));
+          setApprovalErrors((prev) => ({ ...prev, [key]: null }));
+          try {
+            const prepareRes = await fetch("/api/swap/prepare", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                strategy,
+                walletAddress: address,
+              }),
+            });
+            const preparePayload = (await prepareRes.json()) as
+              | SwapPrepareResponse
+              | { error?: string };
+
+            if (!prepareRes.ok || !("swapTx" in preparePayload)) {
+              throw new Error(
+                (preparePayload as { error?: string }).error ??
+                  `Swap preparation failed (${prepareRes.status})`,
+              );
+            }
+
+            const ethersProvider = new BrowserProvider(walletProvider as any);
+            const signer = await ethersProvider.getSigner();
+
+            if (preparePayload.approvalTx) {
+              const approvalTx = await signer.sendTransaction({
+                to: preparePayload.approvalTx.to,
+                data: preparePayload.approvalTx.data,
+                value: preparePayload.approvalTx.value
+                  ? BigInt(preparePayload.approvalTx.value)
+                  : BigInt(0),
+              });
+              await approvalTx.wait();
+            }
+
+            const swapTx = await signer.sendTransaction({
+              to: preparePayload.swapTx.to,
+              data: preparePayload.swapTx.data,
+              value: preparePayload.swapTx.value
+                ? BigInt(preparePayload.swapTx.value)
+                : BigInt(0),
+            });
+            await swapTx.wait();
+
+            setApprovalStates((prev) => ({
+              ...prev,
+              [key]: { approved: true, rejected: false },
+            }));
+            onState({
+              ...state,
+              execution: {
+                success: true,
+                dryRun: false,
+                txHash: swapTx.hash,
+                pair:
+                  strategy.tokenInSymbol && strategy.tokenOutSymbol
+                    ? `${strategy.tokenInSymbol} → ${strategy.tokenOutSymbol}`
+                    : undefined,
+                rationale:
+                  "Signed and broadcasted from connected Reown wallet.",
+              },
+            });
+
+            respond?.({
+              approved: true,
+              executedByUserWallet: true,
+              txHash: swapTx.hash,
+              message:
+                "Swap signed and sent from connected wallet. Do not call Executor Agent again.",
+            });
+          } catch (error) {
+            const message =
+              error instanceof Error ? error.message : "Swap signing failed";
+            setApprovalErrors((prev) => ({
+              ...prev,
+              [key]: message,
+            }));
+            respond?.({
+              approved: false,
+              message: `Swap not sent: ${message}`,
+            });
+          } finally {
+            setApprovalSubmitting((prev) => ({ ...prev, [key]: false }));
+          }
         };
         const handleReject = () => {
           setApprovalStates((prev) => ({
@@ -408,13 +604,25 @@ export const SwarmChat: React.FC<SwarmChatProps> = ({ state, onState }) => {
             critique={critique}
             isApproved={current.approved}
             isRejected={current.rejected}
+            isSubmitting={approvalSubmitting[key] === true}
+            error={approvalErrors[key] ?? null}
             onApprove={handleApprove}
             onReject={handleReject}
           />
         );
       },
     },
-    [approvalStates],
+    [
+      approvalStates,
+      approvalSubmitting,
+      approvalErrors,
+      isConnected,
+      address,
+      walletProvider,
+      open,
+      onState,
+      state,
+    ],
   );
 
   return (
@@ -429,7 +637,7 @@ export const SwarmChat: React.FC<SwarmChatProps> = ({ state, onState }) => {
           initial:
             '👋 I\'m your Uniswap Swarm orchestrator.\n\nJust tell me what you want — e.g. "find some safe trades" or "scout opportunities for ~$200". I\'ll dispatch the Researcher first, then Planner → Risk → Strategy → Critic, and only ask for your approval once I have a concrete trade to propose.',
         }}
-        instructions="You are the Uniswap Swarm orchestrator. Dispatch only the stages the user actually asked for. For broad discovery requests, run Researcher first and stop unless the user asks for deeper analysis. Run Risk only when the user explicitly asks for risk/audit/safety checks, or asks for a full pipeline/recommendation/execution. Do NOT call gather_swap_intent unless the user's message has no actionable content."
+        instructions={`You are the Uniswap Swarm orchestrator. Dispatch only the stages the user actually asked for. For broad discovery requests, run Researcher first and stop unless the user asks for deeper analysis. Run Risk only when the user explicitly asks for risk/audit/safety checks, or asks for a full pipeline/recommendation/execution. Do NOT call gather_swap_intent unless the user's message has no actionable content. ${walletContextSnippet}`}
         suggestions={[
           {
             title: "Find safe trade",
