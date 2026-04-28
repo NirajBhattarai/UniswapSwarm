@@ -17,9 +17,8 @@ export const SWARM_PIPELINE_NODE_IDS = {
 export type SwarmPipelineNodeId =
   (typeof SWARM_PIPELINE_NODE_IDS)[keyof typeof SWARM_PIPELINE_NODE_IDS];
 
-/** Top-to-bottom pipeline order (User intent → agents → storage). */
+/** Top-to-bottom pipeline order (User intent → agents). */
 export const SWARM_PIPELINE_STAGE_ORDER: readonly string[] = [
   SWARM_PIPELINE_NODE_IDS.userIntent,
   ...SWARM_AGENTS.map((a) => a.id),
-  SWARM_PIPELINE_NODE_IDS.storage,
 ];

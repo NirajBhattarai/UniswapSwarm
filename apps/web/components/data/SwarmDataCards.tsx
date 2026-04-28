@@ -8,6 +8,7 @@
  */
 
 import React, { useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import { BrowserProvider, ethers } from "ethers";
 import {
   useAppKit,
@@ -674,10 +675,18 @@ const ExecutionCard: React.FC<{
   const [portfolio, setPortfolio] = useState<WalletPortfolio | null>(null);
   const [swapOpen, setSwapOpen] = useState(false);
   const [selectedToken, setSelectedToken] = useState<string>("");
+  const [slippagePct, setSlippagePct] = useState<string>(
+    String(strategy?.slippagePct ?? 1.5),
+  );
   const [amount, setAmount] = useState<string>("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [txHash, setTxHash] = useState<string | null>(null);
+  const [isClient, setIsClient] = useState(false);
+
+  useEffect(() => {
+    setIsClient(true);
+  }, []);
 
   useEffect(() => {
     if (!isConnected || !address) {
@@ -695,10 +704,31 @@ const ExecutionCard: React.FC<{
         const payload = (await res.json()) as WalletPortfolio;
         if (cancelled) return;
         setPortfolio(payload);
-        const first = payload.nonZeroBalances[0];
+        const preferredByAddress = strategy?.tokenIn
+          ? payload.nonZeroBalances.find(
+              (item) =>
+                item.address.toLowerCase() === strategy.tokenIn?.toLowerCase(),
+            )
+          : undefined;
+        const preferredBySymbol = strategy?.tokenInSymbol
+          ? payload.nonZeroBalances.find(
+              (item) =>
+                item.symbol.toLowerCase() ===
+                strategy.tokenInSymbol?.toLowerCase(),
+            )
+          : undefined;
+        const first =
+          preferredByAddress ?? preferredBySymbol ?? payload.nonZeroBalances[0];
+
         if (first && !selectedToken) {
           setSelectedToken(first.address);
-          const suggested = Math.max(Number(first.balance) * 0.2, 0);
+          const strategyUsd = strategy?.amountInUsd;
+          const fullBalance = Number(first.balance);
+          const fallbackSuggestion = Math.max(fullBalance * 0.2, 0);
+          const suggested =
+            typeof strategyUsd === "number" && strategyUsd > 0
+              ? Math.min(strategyUsd, fullBalance)
+              : fallbackSuggestion;
           setAmount(suggested > 0 ? suggested.toFixed(6) : "");
         }
       } catch {
@@ -709,7 +739,13 @@ const ExecutionCard: React.FC<{
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isConnected, address]);
+  }, [
+    isConnected,
+    address,
+    strategy?.tokenIn,
+    strategy?.tokenInSymbol,
+    strategy?.amountInUsd,
+  ]);
 
   const tokenOptions = portfolio?.nonZeroBalances ?? [];
   const chosen = useMemo(
@@ -719,11 +755,17 @@ const ExecutionCard: React.FC<{
   const tokenOutAddress = strategy?.tokenOut;
   const tokenOutSymbol = strategy?.tokenOutSymbol ?? "target token";
 
+  const slippageValue = Number(slippagePct);
+  const slippageInvalid =
+    !Number.isFinite(slippageValue) || slippageValue <= 0 || slippageValue > 10;
+
   const canSwap =
     Boolean(chosen) &&
     Boolean(tokenOutAddress) &&
+    selectedToken !== tokenOutAddress &&
     Boolean(amount) &&
     Number(amount) > 0 &&
+    !slippageInvalid &&
     !submitting;
 
   async function onSwapNow() {
@@ -732,6 +774,13 @@ const ExecutionCard: React.FC<{
       setSubmitting(true);
       setError(null);
       setTxHash(null);
+
+      if (chosen.address === tokenOutAddress) {
+        throw new Error("From and To assets must be different");
+      }
+      if (slippageInvalid) {
+        throw new Error("Slippage must be between 0.01% and 10%");
+      }
 
       const amountInWei = ethers.parseUnits(amount, chosen.decimals).toString();
       const prepareRes = await fetch("/api/swap/prepare", {
@@ -742,7 +791,7 @@ const ExecutionCard: React.FC<{
           tokenIn: chosen.address,
           tokenOut: tokenOutAddress,
           amountInWei,
-          slippagePct: strategy?.slippagePct ?? 1.5,
+          slippagePct: slippageValue,
         }),
       });
       const payload = (await prepareRes.json()) as {
@@ -796,32 +845,38 @@ const ExecutionCard: React.FC<{
         icon="⚡"
         title="Executor"
         badge={
-          data.success
-            ? data.dryRun
+          data?.success
+            ? data?.dryRun
               ? "dry-run ✓"
               : "executed ✓"
             : "not executed"
         }
         tone={
-          data.success
+          data?.success
             ? "bg-emerald-100 text-emerald-700"
             : "bg-orange-100 text-orange-700"
         }
       />
-      {data.pair && (
+      {data?.pair && (
         <p className="text-xs text-slate-700">
-          Pair: <span className="font-semibold">{data.pair}</span>
+          Pair: <span className="font-semibold">{data?.pair}</span>
         </p>
       )}
-      {data.txHash && (
-        <p className="mt-1 break-all rounded-md bg-white/80 p-2 font-mono text-[11px] text-slate-700">
+      {data?.txHash && (
+        <a
+          href={`https://etherscan.io/tx/${data.txHash}`}
+          target="_blank"
+          rel="noreferrer"
+          className="mt-1 block break-all rounded-md bg-white/80 p-2 font-mono text-[11px] text-slate-700 underline underline-offset-2 hover:text-slate-900"
+          title="Open transaction on Etherscan"
+        >
           {data.txHash}
-        </p>
+        </a>
       )}
-      {data.rationale && (
-        <p className="mt-1 text-xs text-slate-600">{data.rationale}</p>
+      {data?.rationale && (
+        <p className="mt-1 text-xs text-slate-600">{data?.rationale}</p>
       )}
-      {!data.success && strategy?.tokenOut && (
+      {!data?.success && tokenOutAddress && (
         <button
           type="button"
           onClick={() => {
@@ -836,79 +891,174 @@ const ExecutionCard: React.FC<{
           {isConnected ? "Open Swap" : "Connect Wallet to Swap"}
         </button>
       )}
-      {swapOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-          <div className="w-full max-w-md rounded-xl bg-white p-4 shadow-xl">
-            <div className="mb-2 flex items-center justify-between">
-              <p className="text-sm font-semibold text-slate-900">
-                Swap on Uniswap
+      {swapOpen &&
+        isClient &&
+        createPortal(
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+            <div className="w-full max-w-4xl rounded-2xl border border-emerald-200 bg-white p-5 shadow-2xl">
+              <div className="mb-2 flex items-center justify-between">
+                <p className="text-base font-semibold text-slate-900">
+                  Swap on Uniswap
+                </p>
+                <button
+                  type="button"
+                  className="text-xs text-slate-500 hover:text-slate-700"
+                  onClick={() => {
+                    setSwapOpen(false);
+                  }}
+                >
+                  Close
+                </button>
+              </div>
+              <p className="mb-4 rounded-lg border border-emerald-100 bg-emerald-50 px-3 py-2 text-xs text-emerald-800">
+                Connected to the <span className="font-semibold">Executor</span>{" "}
+                stage. Strategy data is prefilled so you can execute quickly.
               </p>
-              <button
-                type="button"
-                className="text-xs text-slate-500 hover:text-slate-700"
-                onClick={() => setSwapOpen(false)}
-              >
-                Close
-              </button>
+
+              <div className="grid gap-5 md:grid-cols-[1.2fr_1fr]">
+                <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-4">
+                  <p className="mb-3 text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
+                    Swap Input
+                  </p>
+                  <p className="mb-3 text-xs text-slate-600">
+                    Ethereum mainnet only. To asset comes from pipeline
+                    strategy.
+                  </p>
+                  <p className="mb-3 rounded-md border border-slate-200 bg-white/80 px-2 py-1 text-[11px] text-slate-700">
+                    Chain:{" "}
+                    <span className="font-semibold">Ethereum (chainId 1)</span>
+                  </p>
+
+                  <label className="mb-1 block text-[11px] font-semibold text-slate-600">
+                    From asset
+                  </label>
+                  <select
+                    value={selectedToken}
+                    onChange={(e) => setSelectedToken(e.target.value)}
+                    className="mb-3 w-full rounded-md border border-slate-300 px-2 py-2 text-xs"
+                  >
+                    {tokenOptions.length === 0 ? (
+                      <option value="">No non-zero assets found</option>
+                    ) : (
+                      tokenOptions.map((t) => (
+                        <option key={t.address} value={t.address}>
+                          {t.symbol} ({Number(t.balance).toFixed(6)})
+                        </option>
+                      ))
+                    )}
+                  </select>
+
+                  <p className="mb-3 rounded-md border border-slate-200 bg-white/80 px-2 py-1 text-[11px] text-slate-700">
+                    To asset:{" "}
+                    <span className="font-semibold">{tokenOutSymbol}</span>
+                  </p>
+
+                  <label className="mb-1 block text-[11px] font-semibold text-slate-600">
+                    Amount
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="any"
+                    value={amount}
+                    onChange={(e) => setAmount(e.target.value)}
+                    className="mb-3 w-full rounded-md border border-slate-300 px-2 py-2 text-xs"
+                    placeholder="0.0"
+                  />
+                  <label className="mb-1 block text-[11px] font-semibold text-slate-600">
+                    Slippage (%)
+                  </label>
+                  <input
+                    type="number"
+                    min="0.01"
+                    max="10"
+                    step="0.01"
+                    value={slippagePct}
+                    onChange={(e) => setSlippagePct(e.target.value)}
+                    className="mb-3 w-full rounded-md border border-slate-300 px-2 py-2 text-xs"
+                    placeholder="1.50"
+                  />
+                  {slippageInvalid && (
+                    <p className="mb-2 text-[11px] text-amber-700">
+                      Slippage must be between 0.01% and 10%.
+                    </p>
+                  )}
+
+                  {error && (
+                    <p className="mb-2 rounded-md border border-rose-300 bg-rose-50 px-2 py-1 text-[11px] text-rose-700">
+                      {error}
+                    </p>
+                  )}
+                  {txHash && (
+                    <a
+                      href={`https://etherscan.io/tx/${txHash}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="mb-2 block break-all rounded-md border border-emerald-300 bg-emerald-50 px-2 py-1 font-mono text-[11px] text-emerald-700 underline underline-offset-2 hover:text-emerald-900"
+                      title="Open transaction on Etherscan"
+                    >
+                      {txHash}
+                    </a>
+                  )}
+                  <button
+                    type="button"
+                    disabled={!canSwap}
+                    onClick={onSwapNow}
+                    className={`w-full rounded-md px-2 py-2 text-xs font-semibold text-white ${
+                      canSwap
+                        ? "bg-emerald-600 hover:bg-emerald-700"
+                        : "cursor-not-allowed bg-slate-300"
+                    }`}
+                  >
+                    {submitting
+                      ? "Waiting for wallet signature..."
+                      : "Sign & Swap"}
+                  </button>
+                </div>
+
+                <div className="rounded-xl border border-cyan-200 bg-cyan-50/60 p-4">
+                  <p className="mb-3 text-xs font-semibold uppercase tracking-[0.14em] text-cyan-700">
+                    Executor Strategy Context
+                  </p>
+                  <div className="space-y-2 text-xs text-slate-700">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-slate-500">Pair</span>
+                      <span className="font-semibold">
+                        {chosen?.symbol && tokenOutSymbol
+                          ? `${chosen.symbol} → ${tokenOutSymbol}`
+                          : strategy?.tokenInSymbol && strategy?.tokenOutSymbol
+                            ? `${strategy.tokenInSymbol} → ${strategy.tokenOutSymbol}`
+                            : (data?.pair ?? "—")}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-slate-500">Target chain</span>
+                      <span className="font-semibold">Ethereum Mainnet</span>
+                    </div>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-slate-500">Suggested size</span>
+                      <span className="font-semibold">
+                        {formatUsd(strategy?.amountInUsd)}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-slate-500">Slippage</span>
+                      <span className="font-semibold">
+                        {slippageInvalid ? "—" : `${slippageValue}%`}
+                      </span>
+                    </div>
+                  </div>
+                  {strategy?.rationale && (
+                    <p className="mt-3 rounded-md bg-white/70 p-2 text-[11px] text-slate-600">
+                      {strategy.rationale}
+                    </p>
+                  )}
+                </div>
+              </div>
             </div>
-            <p className="mb-3 text-xs text-slate-600">
-              Select a wallet asset to swap into {tokenOutSymbol}.
-            </p>
-            <label className="mb-1 block text-[11px] font-semibold text-slate-600">
-              From asset
-            </label>
-            <select
-              value={selectedToken}
-              onChange={(e) => setSelectedToken(e.target.value)}
-              className="mb-3 w-full rounded-md border border-slate-300 px-2 py-2 text-xs"
-            >
-              {tokenOptions.length === 0 ? (
-                <option value="">No non-zero assets found</option>
-              ) : (
-                tokenOptions.map((t) => (
-                  <option key={t.address} value={t.address}>
-                    {t.symbol} ({Number(t.balance).toFixed(6)})
-                  </option>
-                ))
-              )}
-            </select>
-            <label className="mb-1 block text-[11px] font-semibold text-slate-600">
-              Amount
-            </label>
-            <input
-              type="number"
-              min="0"
-              step="any"
-              value={amount}
-              onChange={(e) => setAmount(e.target.value)}
-              className="mb-3 w-full rounded-md border border-slate-300 px-2 py-2 text-xs"
-              placeholder="0.0"
-            />
-            {error && (
-              <p className="mb-2 rounded-md border border-rose-300 bg-rose-50 px-2 py-1 text-[11px] text-rose-700">
-                {error}
-              </p>
-            )}
-            {txHash && (
-              <p className="mb-2 break-all rounded-md border border-emerald-300 bg-emerald-50 px-2 py-1 font-mono text-[11px] text-emerald-700">
-                {txHash}
-              </p>
-            )}
-            <button
-              type="button"
-              disabled={!canSwap}
-              onClick={onSwapNow}
-              className={`w-full rounded-md px-2 py-2 text-xs font-semibold text-white ${
-                canSwap
-                  ? "bg-emerald-600 hover:bg-emerald-700"
-                  : "cursor-not-allowed bg-slate-300"
-              }`}
-            >
-              {submitting ? "Waiting for wallet signature..." : "Sign & Swap"}
-            </button>
-          </div>
-        </div>
-      )}
+          </div>,
+          document.body,
+        )}
     </div>
   );
 };
