@@ -39,11 +39,31 @@ export interface TokenCandidate {
   txCount: number;
 }
 
+// ─── Wallet position types ────────────────────────────────────────────────────
+
+export interface WalletHolding {
+  symbol: string;
+  address: string; // "ETH" for native Ether, checksummed ERC-20 address otherwise
+  decimals: number;
+  balanceFormatted: number; // human-readable balance (e.g. 1.23)
+  priceUSD: number;
+  valueUSD: number; // balanceFormatted * priceUSD
+}
+
+export interface PositionAdvice {
+  symbol: string;
+  action: "HOLD" | "REDUCE" | "EXIT" | "ADD";
+  rationale: string;
+}
+
 export interface ResearchReport {
   timestamp: number;
   marketSummary: string;
   candidates: TokenCandidate[];
   dataSource: string;
+  // Optional wallet-specific fields — populated when walletAddress is provided
+  walletHoldings?: WalletHolding[];
+  positionAdvice?: PositionAdvice[];
 }
 
 // ─── Risk types ────────────────────────────────────────────────────────────────

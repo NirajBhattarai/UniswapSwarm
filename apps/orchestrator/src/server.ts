@@ -137,7 +137,10 @@ export function createServer(
     "/a2a/route/stream",
     async (req: Request, res: Response): Promise<void> => {
       const sessionId = resolveSessionId(req);
-      const { query } = req.body as { query?: string };
+      const { query, walletAddress } = req.body as {
+        query?: string;
+        walletAddress?: string;
+      };
       const requestText =
         typeof query === "string" && query.trim().length > 0
           ? query.trim()
@@ -229,6 +232,7 @@ export function createServer(
             sessionId,
             requestText,
             onChunk("researcher"),
+            walletAddress,
           );
           emitAgentDone(
             "researcher",
@@ -296,6 +300,7 @@ export function createServer(
           const strategy = await orchestrator.runStrategy(
             sessionId,
             onChunk("strategy"),
+            walletAddress,
           );
           emitAgentDone(
             "strategy",
@@ -496,6 +501,7 @@ export function createServer(
   // ── Full pipeline — blocking JSON ───────────────────────────────────────────
   app.post("/cycle", async (_req: Request, res: Response): Promise<void> => {
     const sessionId = resolveSessionId(_req);
+    const { walletAddress } = (_req.body ?? {}) as { walletAddress?: string };
     if (orchestrator.isRunning()) {
       res.status(409).json({ error: "A cycle is already running" });
       return;
@@ -503,7 +509,7 @@ export function createServer(
     try {
       orchestrator.setRunning(true);
       res.setHeader("X-Session-Id", sessionId);
-      const state = await orchestrator.runCycle(sessionId);
+      const state = await orchestrator.runCycle(sessionId, walletAddress);
       res.json({ sessionId, ...state });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -518,6 +524,7 @@ export function createServer(
     "/cycle/stream",
     async (_req: Request, res: Response): Promise<void> => {
       const sessionId = resolveSessionId(_req);
+      const { walletAddress } = (_req.body ?? {}) as { walletAddress?: string };
       if (orchestrator.isRunning()) {
         res.status(409).json({ error: "A cycle is already running" });
         return;
@@ -526,7 +533,10 @@ export function createServer(
       res.setHeader("X-Session-Id", sessionId);
       try {
         orchestrator.setRunning(true);
-        for await (const event of orchestrator.runCycleStream(sessionId)) {
+        for await (const event of orchestrator.runCycleStream(
+          sessionId,
+          walletAddress,
+        )) {
           sseSend(res, event);
         }
       } finally {
@@ -581,20 +591,28 @@ export function createServer(
   }
 
   // ── Researcher ──────────────────────────────────────────────────────────────
-  // POST /agents/researcher          body: { goal?: string }
-  // POST /agents/researcher/stream   body: { goal?: string }
+  // POST /agents/researcher          body: { goal?: string, walletAddress?: string }
+  // POST /agents/researcher/stream   body: { goal?: string, walletAddress?: string }
   app.post(
     "/agents/researcher",
     agentJson("researcher", (req, sessionId) => {
-      const goal = (req.body as { goal?: string }).goal;
-      return () => orchestrator.runResearcher(sessionId, goal);
+      const { goal, walletAddress } = req.body as {
+        goal?: string;
+        walletAddress?: string;
+      };
+      return () =>
+        orchestrator.runResearcher(sessionId, goal, undefined, walletAddress);
     }),
   );
   app.post(
     "/agents/researcher/stream",
     agentStream("researcher", (req, sessionId) => {
-      const goal = (req.body as { goal?: string }).goal;
-      return () => orchestrator.runResearcher(sessionId, goal);
+      const { goal, walletAddress } = req.body as {
+        goal?: string;
+        walletAddress?: string;
+      };
+      return () =>
+        orchestrator.runResearcher(sessionId, goal, undefined, walletAddress);
     }),
   );
 
@@ -796,18 +814,22 @@ export function createServer(
   );
 
   // ── Strategy ────────────────────────────────────────────────────────────────
-  // POST /agents/strategy          (no body required — reads memory)
-  // POST /agents/strategy/stream
+  // POST /agents/strategy          body: { walletAddress?: string }
+  // POST /agents/strategy/stream   body: { walletAddress?: string }
   app.post(
     "/agents/strategy",
-    agentJson("strategy", (_req, sessionId) => {
-      return () => orchestrator.runStrategy(sessionId);
+    agentJson("strategy", (req, sessionId) => {
+      const { walletAddress } = (req.body ?? {}) as { walletAddress?: string };
+      return () =>
+        orchestrator.runStrategy(sessionId, undefined, walletAddress);
     }),
   );
   app.post(
     "/agents/strategy/stream",
-    agentStream("strategy", (_req, sessionId) => {
-      return () => orchestrator.runStrategy(sessionId);
+    agentStream("strategy", (req, sessionId) => {
+      const { walletAddress } = (req.body ?? {}) as { walletAddress?: string };
+      return () =>
+        orchestrator.runStrategy(sessionId, undefined, walletAddress);
     }),
   );
 

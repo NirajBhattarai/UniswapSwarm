@@ -31,6 +31,11 @@ export const SwarmConfigSchema = z.object({
   // CoinGecko API (https://www.coingecko.com/en/api — free demo key or pro key)
   COINGECKO_API_KEY: z.string().default(""),
 
+  // Alchemy API key (https://dashboard.alchemy.com) — enables auto-discovery of all
+  // ERC-20 holdings via alchemy_getTokenBalances instead of the hardcoded token list.
+  // When absent, falls back to Multicall3 (known tokens only).
+  ALCHEMY_API_KEY: z.string().default(""),
+
   // Trade constraints (can be overridden via env)
   MAX_SLIPPAGE_PCT: z.coerce.number().default(1.5),
   MAX_POSITION_USDC: z.coerce.number().default(50),

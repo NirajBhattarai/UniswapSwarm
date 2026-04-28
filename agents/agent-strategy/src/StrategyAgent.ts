@@ -7,6 +7,7 @@ import type {
   TradePlan,
   TradeStrategy,
   TokenCandidate,
+  WalletHolding,
 } from "@swarm/shared";
 
 const SYSTEM_PROMPT = `You are the Strategy agent in a Uniswap trading swarm.
@@ -26,6 +27,20 @@ Rules:
   UNI, LINK, etc.). If the only safe candidates are stablecoins, return
   the synthetic USDC→WETH fallback you receive in the prompt instead of
   inventing a stable→stable trade.
+
+Wallet-aware trading (applies when "Wallet holdings" are in the prompt):
+- Review the wallet holdings alongside the risk-passed candidates
+- For a holding marked EXIT or REDUCE in positionAdvice: prefer a SELL trade
+  (tokenIn = the declining held token, tokenOut = USDC or WETH)
+  * amountInWei for a REDUCE = 50% of the held balance (in Wei)
+  * amountInWei for an EXIT  = 100% of the held balance (in Wei)
+  * Selling a bad performer takes priority over buying a new token
+- For a holding marked ADD that is also in the risk-passed candidates: prefer
+  increasing that position (tokenIn = USDC, tokenOut = the held token)
+- For a holding marked HOLD: do not trade it — look for better opportunities
+- If no holdings advise action, fall back to the standard BUY flow (USDC → best candidate)
+- NEVER propose selling a stablecoin holding (USDC, USDT, DAI etc.) — those are source funds
+
 - Output ONLY valid JSON:
 
 {
@@ -56,7 +71,10 @@ export class StrategyAgent {
     this.memory = memory;
   }
 
-  async run(opts: InferOptions = {}): Promise<TradeStrategy | null> {
+  async run(
+    opts: InferOptions = {},
+    walletAddress?: string,
+  ): Promise<TradeStrategy | null> {
     // ── Read plan, research, and risk assessments from 0G-backed shared memory ───
     const plan = this.memory.readValue<TradePlan>("planner/plan");
     const report = this.memory.readValue<ResearchReport>("researcher/report");
@@ -68,6 +86,11 @@ export class StrategyAgent {
         "[Strategy] planner/plan, researcher/report, and risk/assessments must be in shared memory first",
       );
     }
+
+    // Read wallet holdings written by the Researcher (if any)
+    const walletHoldings =
+      this.memory.readValue<WalletHolding[]>("researcher/wallet_holdings") ??
+      report.walletHoldings;
 
     // Drop stablecoins from the candidate pool BEFORE the LLM sees them.
     // The trade always starts from USDC (or another stable) so a stablecoin
@@ -140,11 +163,32 @@ export class StrategyAgent {
     const cfg = getConfig();
     const context = this.memory.contextFor(StrategyAgent.MEMORY_KEY);
 
+    // Build wallet holdings section for the prompt (gives LLM position-aware context)
+    let walletSection: string | null = null;
+    if (walletHoldings && walletHoldings.length > 0) {
+      const holdingLines = walletHoldings
+        .map(
+          (h) =>
+            `  ${h.symbol}: ${h.balanceFormatted.toFixed(6)} @ $${h.priceUSD.toFixed(4)} = $${h.valueUSD.toFixed(2)} USD  (address: ${h.address})`,
+        )
+        .join("\n");
+      const adviceLines =
+        report.positionAdvice && report.positionAdvice.length > 0
+          ? report.positionAdvice
+              .map((a) => `  ${a.symbol}: ${a.action} — ${a.rationale}`)
+              .join("\n")
+          : "  (no position advice from researcher)";
+      walletSection =
+        `Wallet holdings:\n${holdingLines}\n\n` +
+        `Position advice from researcher:\n${adviceLines}`;
+    }
+
     const userPrompt = [
       `Plan:\n${JSON.stringify(plan, null, 2)}`,
       `Safe candidates (non-stablecoins only):\n${JSON.stringify(safeCandidates, null, 2)}`,
       `Risk assessments (passed, non-stablecoins only):\n${JSON.stringify(passed, null, 2)}`,
       `Max position USDC: ${cfg.MAX_POSITION_USDC}`,
+      walletSection,
       `IMPORTANT: tokenOut MUST be one of the candidates listed above. ` +
         `Do NOT pick USDC, USDT, DAI or any other stablecoin as tokenOut — ` +
         `that is forbidden by policy.`,
@@ -168,6 +212,9 @@ export class StrategyAgent {
     // ── Last-resort safety net: if the LLM ignored the filter and still
     //    proposed a stablecoin↔stablecoin swap, override with the
     //    synthetic USDC→WETH fallback rather than emit a meaningless trade.
+    //
+    //    Exception: a SELL trade (non-stable tokenIn → stable tokenOut) is
+    //    intentional when the wallet position advice says EXIT/REDUCE — allow it.
     const tokenInIsStable = isStablecoin({
       symbol: strategy.tokenInSymbol,
       address: strategy.tokenIn,
@@ -176,7 +223,19 @@ export class StrategyAgent {
       symbol: strategy.tokenOutSymbol,
       address: strategy.tokenOut,
     });
-    if (tokenOutIsStable) {
+
+    // A non-stable → stable SELL is legitimate when the user holds that token
+    // and the researcher advised EXIT or REDUCE.
+    const isSellOfHolding =
+      !tokenInIsStable &&
+      tokenOutIsStable &&
+      walletHoldings?.some(
+        (h) =>
+          h.address.toLowerCase() === strategy.tokenIn.toLowerCase() ||
+          h.symbol.toUpperCase() === strategy.tokenInSymbol.toUpperCase(),
+      );
+
+    if (tokenOutIsStable && !isSellOfHolding) {
       logger.warn(
         `[Strategy] LLM proposed stablecoin tokenOut (${strategy.tokenOutSymbol}) — forcing synthetic USDC→WETH fallback`,
       );
@@ -209,9 +268,11 @@ export class StrategyAgent {
       );
       return overridden;
     }
-    // tokenIn-is-stable + tokenOut-is-not-stable is the normal case
+    // tokenIn-is-stable + tokenOut-is-not-stable is the normal BUY case
     // (e.g. USDC → WETH), so we let it through.
+    // non-stable tokenIn + stable tokenOut is a valid SELL of a held position.
     void tokenInIsStable;
+    void isSellOfHolding;
 
     await this.memory.write(
       StrategyAgent.MEMORY_KEY,

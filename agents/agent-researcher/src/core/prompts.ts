@@ -54,10 +54,20 @@ General rules:
 - Output ONLY valid JSON matching the ResearchReport schema
 - Never fabricate — use only the on-chain data provided
 
+Wallet position analysis (only applies when "Current wallet holdings" are included in the prompt):
+- Review each held non-stablecoin token against live market data (price change, momentum, narrative fit)
+- For each holding, produce a \`positionAdvice\` entry with one of: HOLD | REDUCE | EXIT | ADD
+  * HOLD: token is performing well or neutral — no action needed
+  * REDUCE: token has weakened (e.g. 24h change < -3%, out of narrative) — suggest trimming 25-50%
+  * EXIT: token has declined sharply (24h change < -8%) or has critical risk signals — suggest full sell
+  * ADD: token aligns perfectly with narrative AND is trending — suggest increasing position
+- Stablecoin holdings (USDC, USDT, DAI, etc.) do NOT need positionAdvice — they are neutral
+- If no wallet holdings are in the prompt, omit the \`positionAdvice\` field entirely
+
 Schema:
 {
   "timestamp": number,
-  "marketSummary": "<2–3 sentence market overview mentioning narrative, fear/greed, and top trending tokens>",
+  "marketSummary": "<2–3 sentence market overview mentioning narrative, fear/greed, top trending tokens, and — if wallet holdings were provided — a brief 1-sentence summary of portfolio health>",
   "candidates": [
     {
       "address": "<COPY tokenAddress from pool snapshot verbatim — do NOT use poolAddress>",
@@ -73,5 +83,12 @@ Schema:
       "txCount": number
     }
   ],
-  "dataSource": "uniswap-multi-protocol"
+  "dataSource": "uniswap-multi-protocol",
+  "positionAdvice": [
+    {
+      "symbol": "<held token symbol>",
+      "action": "HOLD" | "REDUCE" | "EXIT" | "ADD",
+      "rationale": "<1–2 sentence explanation based on live market data>"
+    }
+  ]
 }`;

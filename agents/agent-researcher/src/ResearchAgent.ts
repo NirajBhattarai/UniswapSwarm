@@ -7,7 +7,11 @@ import {
   UNISWAP_TRADE_API_BASE_URL,
   isStablecoin,
 } from "@swarm/shared";
-import type { ResearchReport, TokenCandidate } from "@swarm/shared";
+import type {
+  ResearchReport,
+  TokenCandidate,
+  WalletHolding,
+} from "@swarm/shared";
 import { ethers } from "ethers";
 import { Impit } from "impit";
 
@@ -16,6 +20,9 @@ import {
   QUOTER_V2_ABI,
   FACTORY_ABI,
   ERC20_META_ABI,
+  MULTICALL3_ADDRESS,
+  MULTICALL3_ABI,
+  ERC20_BALANCE_IFACE_ABI,
   SYMBOL_TO_TOKEN,
   ADDRESS_TO_SYMBOL,
   USDC_DEF,
@@ -88,8 +95,16 @@ export class ResearchAgent {
    * Researcher runs FIRST in the pipeline — before the Planner.
    * It fetches live on-chain data and writes the report to shared 0G memory.
    * The Planner then reads this report via contextFor() and uses it to plan.
+   *
+   * @param walletAddress Optional Ethereum address — when provided, the agent fetches
+   *                      all ERC-20 + native ETH balances for the wallet, enriches
+   *                      each holding with USD value, and advises on each position.
    */
-  async run(goal: string, opts: InferOptions = {}): Promise<ResearchReport> {
+  async run(
+    goal: string,
+    opts: InferOptions = {},
+    walletAddress?: string,
+  ): Promise<ResearchReport> {
     logger.info(
       `[Researcher] Fetching Uniswap multi-protocol pool data via Uniswap Trading API…`,
     );
@@ -156,6 +171,33 @@ export class ResearchAgent {
     const context = this.memory.contextFor(ResearchAgent.MEMORY_KEY);
     const marketDataText = buildMarketDataText(marketData);
     const narrativeText = buildNarrativeText(narrativeSignal);
+
+    // Fetch wallet holdings when a wallet address is provided.
+    // This runs after marketData is ready so we can price each holding.
+    let walletHoldings: WalletHolding[] | undefined;
+    if (walletAddress) {
+      try {
+        walletHoldings = await this.fetchWalletHoldings(
+          walletAddress,
+          marketData,
+        );
+        // Persist holdings to shared memory so Strategy / Critic can read them.
+        await this.memory.write(
+          "researcher/wallet_holdings",
+          this.id,
+          this.role,
+          walletHoldings,
+        );
+        logger.info(
+          `[Researcher] Wallet ${walletAddress}: ${walletHoldings.length} non-dust holding(s) found`,
+        );
+      } catch (err) {
+        logger.warn(
+          `[Researcher] Could not fetch wallet holdings: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+
     const userPrompt = buildResearchPrompt({
       goal,
       cfg,
@@ -163,6 +205,7 @@ export class ResearchAgent {
       marketDataText,
       narrativeText,
       context,
+      ...(walletHoldings ? { walletHoldings } : {}),
     });
 
     const report = await this.compute.inferJSON<ResearchReport>(
@@ -173,6 +216,11 @@ export class ResearchAgent {
 
     report.timestamp = Date.now();
     report.dataSource = "uniswap-multi-protocol";
+
+    // Attach on-chain holdings to the report (authoritative — not LLM-generated)
+    if (walletHoldings) {
+      report.walletHoldings = walletHoldings;
+    }
 
     enrichCandidatesWithMarketData(report.candidates, marketData);
     report.candidates = this.postValidateCandidates(
@@ -207,6 +255,338 @@ export class ResearchAgent {
       `[Researcher] Saved ${report.candidates.length} candidates to shared memory`,
     );
     return report;
+  }
+
+  /**
+   * Dispatches to the Alchemy path if `ALCHEMY_API_KEY` is configured, otherwise
+   * falls back to Multicall3. Alchemy is preferred because it auto-discovers every
+   * ERC-20 the wallet holds — not just the tokens in the hardcoded registry.
+   */
+  private async fetchWalletHoldings(
+    walletAddress: string,
+    marketData: Map<string, CoinGeckoMarketData>,
+  ): Promise<WalletHolding[]> {
+    const { ALCHEMY_API_KEY } = getConfig();
+    if (ALCHEMY_API_KEY) {
+      return this.fetchWalletHoldingsAlchemy(
+        walletAddress,
+        marketData,
+        ALCHEMY_API_KEY,
+      );
+    }
+    return this.fetchWalletHoldingsMulticall(walletAddress, marketData);
+  }
+
+  /**
+   * Alchemy path — two HTTP round-trips maximum:
+   *  1. Batch `[eth_getBalance, alchemy_getTokenBalances("erc20")]` → all non-zero balances
+   *  2. Batch `alchemy_getTokenMetadata` for any tokens not in the local registry
+   *
+   * This discovers ALL ERC-20 tokens the wallet holds, including ones absent from
+   * the hardcoded SYMBOL_TO_TOKEN list.
+   */
+  private async fetchWalletHoldingsAlchemy(
+    walletAddress: string,
+    marketData: Map<string, CoinGeckoMarketData>,
+    alchemyKey: string,
+  ): Promise<WalletHolding[]> {
+    const rpcUrl = `https://eth-mainnet.g.alchemy.com/v2/${alchemyKey}`;
+
+    // ── Round-trip 1: ETH balance + all ERC-20 balances ─────────────────────
+    const batchBody = [
+      {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "eth_getBalance",
+        params: [walletAddress, "latest"],
+      },
+      {
+        jsonrpc: "2.0",
+        id: 2,
+        method: "alchemy_getTokenBalances",
+        params: [walletAddress, "erc20"],
+      },
+    ];
+
+    const batchResp = await fetch(rpcUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(batchBody),
+    });
+    if (!batchResp.ok) {
+      throw new Error(`Alchemy batch RPC failed: HTTP ${batchResp.status}`);
+    }
+
+    const batchData = (await batchResp.json()) as Array<{
+      id: number;
+      result?: unknown;
+      error?: { message: string };
+    }>;
+
+    const ethHex = batchData.find((r) => r.id === 1)?.result as
+      | string
+      | undefined;
+    const tokenBalancesResult = batchData.find((r) => r.id === 2)?.result as
+      | {
+          tokenBalances: Array<{
+            contractAddress: string;
+            tokenBalance: string | null;
+          }>;
+        }
+      | undefined;
+
+    const holdings: WalletHolding[] = [];
+
+    // ── Native ETH ───────────────────────────────────────────────────────────
+    if (ethHex) {
+      const ethFormatted = parseFloat(ethers.formatEther(BigInt(ethHex)));
+      const ethPrice =
+        marketData.get("WETH")?.price_usd ??
+        marketData.get("ETH")?.price_usd ??
+        0;
+      if (ethFormatted > 0.0001) {
+        holdings.push({
+          symbol: "ETH",
+          address: "ETH",
+          decimals: 18,
+          balanceFormatted: ethFormatted,
+          priceUSD: ethPrice,
+          valueUSD: ethFormatted * ethPrice,
+        });
+      }
+    }
+
+    // ── ERC-20 tokens ────────────────────────────────────────────────────────
+    // Filter out zero balances (Alchemy returns all known tokens, even empty ones)
+    const ZERO_BALANCE =
+      "0x0000000000000000000000000000000000000000000000000000000000000000";
+    const nonZero = (tokenBalancesResult?.tokenBalances ?? []).filter(
+      (t) => t.tokenBalance && t.tokenBalance !== ZERO_BALANCE,
+    );
+
+    // Build address→{symbol,decimals} lookup from local registry (fast path)
+    const addrToKnown = new Map<string, { symbol: string; decimals: number }>();
+    for (const [sym, def] of Object.entries(SYMBOL_TO_TOKEN)) {
+      addrToKnown.set(def.address.toLowerCase(), {
+        symbol: sym,
+        decimals: def.decimals,
+      });
+    }
+
+    type TokenEntry = {
+      contractAddress: string;
+      tokenBalance: string;
+      symbol: string;
+      decimals: number;
+    };
+
+    const knownEntries: TokenEntry[] = [];
+    const unknownAddresses: string[] = [];
+
+    for (const t of nonZero) {
+      const known = addrToKnown.get(t.contractAddress.toLowerCase());
+      if (known) {
+        knownEntries.push({
+          contractAddress: t.contractAddress,
+          tokenBalance: t.tokenBalance!,
+          symbol: known.symbol,
+          decimals: known.decimals,
+        });
+      } else {
+        unknownAddresses.push(t.contractAddress);
+      }
+    }
+
+    // ── Round-trip 2 (optional): metadata for tokens not in local registry ───
+    const metaMap = new Map<string, { symbol: string; decimals: number }>();
+    if (unknownAddresses.length > 0) {
+      const metaBatch = unknownAddresses.map((addr, i) => ({
+        jsonrpc: "2.0",
+        id: i + 1,
+        method: "alchemy_getTokenMetadata",
+        params: [addr],
+      }));
+      const metaResp = await fetch(rpcUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(metaBatch),
+      });
+      if (metaResp.ok) {
+        const metaData = (await metaResp.json()) as Array<{
+          id: number;
+          result?: { symbol?: string | null; decimals?: number | null };
+        }>;
+        for (let i = 0; i < unknownAddresses.length; i++) {
+          const meta = metaData.find((m) => m.id === i + 1)?.result;
+          if (meta?.symbol && meta?.decimals != null) {
+            metaMap.set(unknownAddresses[i]!.toLowerCase(), {
+              symbol: meta.symbol.toUpperCase(),
+              decimals: meta.decimals,
+            });
+          }
+        }
+      }
+    }
+
+    // Merge unknown tokens that now have metadata
+    const unknownNonZero = nonZero.filter((t) =>
+      unknownAddresses.includes(t.contractAddress),
+    );
+    const unknownEntries: TokenEntry[] = unknownNonZero.flatMap((t) => {
+      const meta = metaMap.get(t.contractAddress.toLowerCase());
+      return meta
+        ? [
+            {
+              contractAddress: t.contractAddress,
+              tokenBalance: t.tokenBalance!,
+              symbol: meta.symbol,
+              decimals: meta.decimals,
+            },
+          ]
+        : [];
+    });
+
+    // ── Price and build holdings ─────────────────────────────────────────────
+    for (const token of [...knownEntries, ...unknownEntries]) {
+      const raw = BigInt(token.tokenBalance);
+      const formatted = parseFloat(ethers.formatUnits(raw, token.decimals));
+      if (formatted <= 0.000001) continue;
+
+      const price = marketData.get(token.symbol)?.price_usd ?? 0;
+      holdings.push({
+        symbol: token.symbol,
+        address: this.toChecksumSafe(token.contractAddress),
+        decimals: token.decimals,
+        balanceFormatted: formatted,
+        priceUSD: price,
+        valueUSD: formatted * price,
+      });
+    }
+
+    return holdings
+      .filter((h) => h.valueUSD > 0.01)
+      .sort((a, b) => b.valueUSD - a.valueUSD);
+  }
+
+  /**
+   * Multicall3 fallback — used when no `ALCHEMY_API_KEY` is set.
+   * Fetches all known ERC-20 token balances + native ETH balance for a wallet
+   * using a single Multicall3 `aggregate3` call — one RPC round-trip instead of N+1.
+   *
+   * Multicall3 is deployed at `0xcA11bde05977b3631167028862bE2a173976CA11` on
+   * Ethereum mainnet and 250+ other chains. All results come from the same block,
+   * giving a consistent atomic snapshot of the wallet.
+   *
+   * Limitation: only checks tokens in the hardcoded SYMBOL_TO_TOKEN registry.
+   */
+  private async fetchWalletHoldingsMulticall(
+    walletAddress: string,
+    marketData: Map<string, CoinGeckoMarketData>,
+  ): Promise<WalletHolding[]> {
+    const provider = this.getEthProvider();
+
+    // All tokens in the known registry (ETH native handled separately via Multicall3)
+    const tokenEntries = Object.entries(SYMBOL_TO_TOKEN).filter(
+      ([sym]) => sym !== "ETH", // ETH is native — queried via getEthBalance on Multicall3
+    );
+
+    // Interface used only for encoding / decoding balanceOf calldata
+    const erc20Iface = new ethers.Interface(ERC20_BALANCE_IFACE_ABI);
+    const mc3Iface = new ethers.Interface(MULTICALL3_ABI);
+
+    // ── Build all calls ──────────────────────────────────────────────────────
+    // Call 0: getEthBalance(walletAddress) on the Multicall3 contract itself
+    const ethBalanceCalldata = mc3Iface.encodeFunctionData("getEthBalance", [
+      walletAddress,
+    ]);
+
+    // Calls 1…N: balanceOf(walletAddress) for each known ERC-20
+    const erc20Calls = tokenEntries.map(([, def]) => ({
+      target: def.address,
+      allowFailure: true,
+      callData: erc20Iface.encodeFunctionData("balanceOf", [walletAddress]),
+    }));
+
+    const allCalls = [
+      {
+        target: MULTICALL3_ADDRESS,
+        allowFailure: true,
+        callData: ethBalanceCalldata,
+      },
+      ...erc20Calls,
+    ];
+
+    // ── Single RPC call ──────────────────────────────────────────────────────
+    const multicall = new ethers.Contract(
+      MULTICALL3_ADDRESS,
+      MULTICALL3_ABI,
+      provider,
+    );
+    const results = (await multicall.getFunction("aggregate3")(
+      allCalls,
+    )) as Array<{
+      success: boolean;
+      returnData: string;
+    }>;
+
+    const holdings: WalletHolding[] = [];
+
+    // ── Decode ETH balance (result[0]) ───────────────────────────────────────
+    const ethResult = results[0];
+    if (ethResult?.success && ethResult.returnData !== "0x") {
+      const [ethRaw] = mc3Iface.decodeFunctionResult(
+        "getEthBalance",
+        ethResult.returnData,
+      ) as unknown as [bigint];
+      const ethFormatted = parseFloat(ethers.formatEther(ethRaw));
+      const ethPrice =
+        marketData.get("WETH")?.price_usd ??
+        marketData.get("ETH")?.price_usd ??
+        0;
+      if (ethFormatted > 0.0001) {
+        holdings.push({
+          symbol: "ETH",
+          address: "ETH",
+          decimals: 18,
+          balanceFormatted: ethFormatted,
+          priceUSD: ethPrice,
+          valueUSD: ethFormatted * ethPrice,
+        });
+      }
+    }
+
+    // ── Decode ERC-20 balances (results[1…N]) ────────────────────────────────
+    for (let i = 0; i < tokenEntries.length; i++) {
+      const result = results[i + 1];
+      if (!result?.success || result.returnData === "0x") continue;
+
+      const [sym, def] = tokenEntries[i]!;
+      try {
+        const [raw] = erc20Iface.decodeFunctionResult(
+          "balanceOf",
+          result.returnData,
+        ) as unknown as [bigint];
+        const formatted = parseFloat(ethers.formatUnits(raw, def.decimals));
+        if (formatted <= 0.000001) continue;
+
+        const price = marketData.get(sym)?.price_usd ?? 0;
+        holdings.push({
+          symbol: sym,
+          address: this.toChecksumSafe(def.address),
+          decimals: def.decimals,
+          balanceFormatted: formatted,
+          priceUSD: price,
+          valueUSD: formatted * price,
+        });
+      } catch {
+        // Failed decode for one token — skip it, others are unaffected
+      }
+    }
+
+    // Sort by USD value descending; filter dust < $0.01
+    return holdings
+      .filter((h) => h.valueUSD > 0.01)
+      .sort((a, b) => b.valueUSD - a.valueUSD);
   }
 
   /**

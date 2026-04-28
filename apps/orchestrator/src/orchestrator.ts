@@ -100,20 +100,23 @@ export class SwarmOrchestrator {
 
   // ── Single cycle (blocking) ─────────────────────────────────────────────────
 
-  async runCycle(sessionId = uuidv4()): Promise<SwarmCycleState> {
+  async runCycle(
+    sessionId = uuidv4(),
+    walletAddress?: string,
+  ): Promise<SwarmCycleState> {
     const cycleId = uuidv4();
     const state: SwarmCycleState = { cycleId, startedAt: Date.now() };
     const ctx = this.getOrCreateSessionContext(sessionId);
     logger.info(
-      `\n${"=".repeat(60)}\n[Swarm] Cycle ${cycleId} starting (session=${sessionId})\n${"=".repeat(60)}`,
+      `\n${"=".repeat(60)}\n[Swarm] Cycle ${cycleId} starting (session=${sessionId}${walletAddress ? ` wallet=${walletAddress}` : ""})\n${"=".repeat(60)}`,
     );
 
     // Clear in-process cache for this cycle (0G Storage entries are permanent)
     ctx.memory.clear();
 
     try {
-      // 1. Researcher runs first — fetches live on-chain data, writes researcher/report
-      state.research = await ctx.researcher.run(GOAL);
+      // 1. Researcher runs first — fetches live on-chain data + wallet holdings, writes researcher/report
+      state.research = await ctx.researcher.run(GOAL, {}, walletAddress);
 
       // 2. Planner reads researcher/report from memory, creates plan, writes planner/plan
       state.plan = await ctx.planner.run(GOAL);
@@ -147,7 +150,10 @@ export class SwarmOrchestrator {
 
   // ── Streaming cycle (SSE) ───────────────────────────────────────────────────
 
-  async *runCycleStream(sessionId = uuidv4()): AsyncGenerator<SwarmEvent> {
+  async *runCycleStream(
+    sessionId = uuidv4(),
+    walletAddress?: string,
+  ): AsyncGenerator<SwarmEvent> {
     const cycleId = uuidv4();
     const ts = () => Date.now();
 
@@ -158,6 +164,7 @@ export class SwarmOrchestrator {
       for (const [agentId, runFn] of this.buildNonStreamingSteps(
         cycleId,
         sessionId,
+        walletAddress,
       )) {
         yield { type: "agent_start", cycleId, agentId, ts: ts() };
         await runFn();
@@ -187,6 +194,7 @@ export class SwarmOrchestrator {
   private buildNonStreamingSteps(
     _cycleId: string,
     sessionId: string,
+    walletAddress?: string,
   ): Array<[string, () => Promise<void>]> {
     const state: SwarmCycleState = {
       cycleId: _cycleId,
@@ -200,7 +208,7 @@ export class SwarmOrchestrator {
       [
         "researcher",
         async () => {
-          state.research = await ctx.researcher.run(GOAL);
+          state.research = await ctx.researcher.run(GOAL, {}, walletAddress);
         },
       ],
       [
@@ -218,7 +226,7 @@ export class SwarmOrchestrator {
       [
         "strategy",
         async () => {
-          const s = await ctx.strategy.run();
+          const s = await ctx.strategy.run({}, walletAddress);
           if (s) state.strategy = s;
         },
       ],
@@ -247,13 +255,15 @@ export class SwarmOrchestrator {
     sessionId: string,
     goal?: string,
     onChunk?: InferOptions["onChunk"],
+    walletAddress?: string,
   ): Promise<ResearchReport> {
     logger.info(
-      `[Orchestrator] 🔬 Researcher Agent called for session ${sessionId}`,
+      `[Orchestrator] 🔬 Researcher Agent called for session ${sessionId}${walletAddress ? ` (wallet=${walletAddress})` : ""}`,
     );
     return this.getOrCreateSessionContext(sessionId).researcher.run(
       goal ?? GOAL,
       onChunk ? { onChunk } : {},
+      walletAddress,
     );
   }
 
@@ -284,12 +294,14 @@ export class SwarmOrchestrator {
   async runStrategy(
     sessionId: string,
     onChunk?: InferOptions["onChunk"],
+    walletAddress?: string,
   ): Promise<TradeStrategy | null> {
     logger.info(
       `[Orchestrator] 🎯 Strategy Agent called for session ${sessionId}`,
     );
     return this.getOrCreateSessionContext(sessionId).strategy.run(
       onChunk ? { onChunk } : {},
+      walletAddress,
     );
   }
 

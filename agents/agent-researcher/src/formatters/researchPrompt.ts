@@ -1,4 +1,8 @@
-import { isStablecoin, type TokenCandidate } from "@swarm/shared";
+import {
+  isStablecoin,
+  type TokenCandidate,
+  type WalletHolding,
+} from "@swarm/shared";
 
 import type {
   CoinGeckoMarketData,
@@ -19,6 +23,7 @@ interface BuildResearchPromptArgs {
   marketDataText: string;
   narrativeText: string;
   context: string;
+  walletHoldings?: WalletHolding[];
 }
 
 export function buildMarketDataText(
@@ -60,7 +65,15 @@ export function buildNarrativeText(narrativeSignal: NarrativeSignal): string {
 }
 
 export function buildResearchPrompt(args: BuildResearchPromptArgs): string {
-  const { goal, cfg, pools, marketDataText, narrativeText, context } = args;
+  const {
+    goal,
+    cfg,
+    pools,
+    marketDataText,
+    narrativeText,
+    context,
+    walletHoldings,
+  } = args;
 
   // Keep the prompt compact for small-context models by sending only the most
   // decision-relevant fields and capping total rows.
@@ -81,12 +94,22 @@ export function buildResearchPrompt(args: BuildResearchPromptArgs): string {
       priceLabel: p.priceLabel,
     }));
 
+  let walletSection: string | null = null;
+  if (walletHoldings && walletHoldings.length > 0) {
+    const lines = walletHoldings.map(
+      (h) =>
+        `  ${h.symbol}: ${h.balanceFormatted.toFixed(6)} tokens @ $${h.priceUSD.toFixed(4)} = $${h.valueUSD.toFixed(2)} USD`,
+    );
+    walletSection = `Current wallet holdings (analyze each non-stablecoin for positionAdvice):\n${lines.join("\n")}`;
+  }
+
   return [
     `Trading goal: ${goal}`,
     `Default constraints: maxSlippage=${cfg.MAX_SLIPPAGE_PCT}%, maxPosition=$${cfg.MAX_POSITION_USDC} USDC, minLiquidity=$${cfg.MIN_LIQUIDITY_USD.toLocaleString()}`,
     `Live Uniswap multi-protocol pool data (compact top ${compactPools.length}) - each entry has a pre-computed \`tokenAddress\` - use it directly as the candidate \`address\` field:\n${JSON.stringify(compactPools)}`,
     marketDataText,
     `\nReal-time narrative signal:\n${narrativeText}`,
+    walletSection,
     context,
   ]
     .filter(Boolean)
