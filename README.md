@@ -210,7 +210,7 @@ The `apps/web` Next.js app implements the same multi-agent UI pattern as
 [CopilotKit/a2a-travel](https://github.com/CopilotKit/a2a-travel), but tailored to
 the Uniswap swap pipeline. Each Uniswap Swarm agent is exposed as its own
 A2A JSON-RPC server, and a `A2AMiddlewareAgent` wraps a Gemini-backed
-orchestration agent and auto-injects the `send_message_to_a2a_agent` tool.
+orchestration agent and auto-injects the `send_message_to_a2a_agent` tools.
 
 ```
 apps/web (CopilotKit + AG-UI)
