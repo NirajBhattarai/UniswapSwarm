@@ -216,14 +216,16 @@ async function fetchUniswapQuoteForPair(
     method: "POST",
     headers: {
       "x-api-key": uniswapApiKey,
+      "x-universal-router-version": "2.0",
       "Content-Type": "application/json",
       Accept: "application/json",
     },
     body: JSON.stringify({
       tokenIn: pair.tokenIn.address,
       tokenOut: pair.tokenOut.address,
-      tokenInChainId: 1,
-      tokenOutChainId: 1,
+      // tokenInChainId / tokenOutChainId MUST be strings per the Trading API spec.
+      tokenInChainId: "1",
+      tokenOutChainId: "1",
       type: "EXACT_INPUT",
       amount: pair.amountIn,
       swapper: QUOTE_SWAPPER_ADDRESS,

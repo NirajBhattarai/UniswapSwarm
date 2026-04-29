@@ -113,12 +113,14 @@ cp .env.example .env
 | `ZG_FLOW_CONTRACT`     | no       | 0G Flow contract address (default: `0xbD2C3F0E65eDF5582141C35969d66e205E00C9c8`) |
 | `UNISWAP_API_KEY`      | no       | Uniswap Trading API key (https://developers.uniswap.org/dashboard)               |
 | `COINGECKO_API_KEY`    | no       | CoinGecko API key — free demo key or pro key (https://www.coingecko.com/en/api)  |
+| `ALCHEMY_API_KEY`      | no       | Enables full ERC-20 wallet holdings discovery (fallback is known-token Multicall) |
 | `MAX_SLIPPAGE_PCT`     | no       | Maximum swap slippage % (default: `1.5`)                                         |
 | `MAX_POSITION_USDC`    | no       | Maximum position size in USDC (default: `50`)                                    |
 | `MIN_LIQUIDITY_USD`    | no       | Minimum pool liquidity required (default: `100000`)                              |
 | `MAX_GAS_GWEI`         | no       | Gas price ceiling in Gwei (default: `30`)                                        |
 | `RISK_SCORE_THRESHOLD` | no       | Minimum risk score to proceed (0–100, default: `70`)                             |
 | `DRY_RUN`              | no       | `true` to simulate swaps without submitting on-chain (default: `true`)           |
+| `SIMULATION_ONLY`      | no       | Extra execution guard. If `true`, forces simulation even when `DRY_RUN=false`     |
 | `CYCLE_INTERVAL_MS`    | no       | Milliseconds between autonomous cycles (default: `300000` = 5 min)               |
 | `PORT`                 | no       | REST server port (default: `4000`)                                               |
 
@@ -130,6 +132,7 @@ cp .env.example .env
 | `COPILOTKIT_MODEL`                   | no              | Gemini model used by the orchestrator (default: `gemini-2.5-flash`).                                      |
 | `NEXT_PUBLIC_COPILOTKIT_RUNTIME_URL` | no              | Frontend → CopilotKit runtime URL (default: `/api/copilotkit`).                                           |
 | `NEXT_PUBLIC_ORCHESTRATOR_URL`       | no              | Frontend → orchestrator REST/A2A base URL (default: `http://localhost:4000`).                             |
+| `NEXT_PUBLIC_REOWN_PROJECT_ID`       | no              | Reown AppKit project ID for wallet connect/signature flows in the web UI.                                  |
 | `A2A_PUBLIC_BASE_URL`                | no              | Public URL embedded in agent cards. Defaults to `http://localhost:${PORT}`.                               |
 | `ORCHESTRATOR_URL`                   | no              | Base URL for A2A agent endpoints (default: `http://localhost:4000`). All agents are accessible as routes. |
 | `RESEARCHER_AGENT_URL`, etc.         | no              | Per-agent URL overrides for the web app. Defaults to `${ORCHESTRATOR_URL}/a2a/agents/<agent-id>`.         |
@@ -192,16 +195,16 @@ Each agent can also be invoked individually. All support both a blocking JSON fo
 
 #### State endpoints
 
-| Method | Path       | Description                        |
-| ------ | ---------- | ---------------------------------- |
-| `GET`  | `/memory`  | Dump current blackboard memory     |
-| `GET`  | `/history` | All cycle states from this session |
-| `GET`  | `/latest`  | Most recent completed cycle state  |
+| Method | Path       | Description                                                                 |
+| ------ | ---------- | --------------------------------------------------------------------------- |
+| `GET`  | `/memory`  | Dump blackboard memory (`?sessionId=...` to scope, no query = all sessions) |
+| `GET`  | `/history` | Cycle history currently held in orchestrator process memory                 |
+| `GET`  | `/latest`  | Most recent completed cycle state                                           |
 
-### Single cycle (CLI)
+### Orchestrator dev server (CLI)
 
 ```sh
-pnpm --filter orchestrator dev
+pnpm --filter @swarm/orchestrator dev
 ```
 
 ### CopilotKit A2A web cockpit
@@ -287,7 +290,7 @@ Every agent writes its output to the shared `BlackboardMemory`. Each write is si
 3. **Risk Agent** reads `planner/plan` + `researcher/report` and runs each candidate through honeypot detection, ownership concentration checks, MEV exposure scoring, and more — writing `risk/assessments`.
 4. **Strategy Agent** reads all prior memory, picks the highest-scoring safe candidate, and crafts an exact swap calldata spec (`TradeStrategy`), writing `strategy/proposal`.
 5. **Critic Agent** reads all memory entries, performs a holistic review, and either approves or rejects with a confidence score + issues list — writing `critic/critique`.
-6. **Executor** — if the Critic approved — calls Uniswap's `SwapRouter02` via `exactInputSingle`. A **`SIMULATION_ONLY` hard guard** in the code defaults to simulation regardless of `DRY_RUN`. Set it to `false` and `DRY_RUN=false` only when the wallet is funded and live trading is intended.
+6. **Executor** — if the Critic approved — executes through Uniswap Trading API (`check_approval` → `quote` → `swap`). Runtime safety defaults to simulation because `DRY_RUN=true` by default. The optional `SIMULATION_ONLY` guard can additionally force simulation regardless of `DRY_RUN`.
 
 ---
 
@@ -329,7 +332,7 @@ and is exposed as `STABLECOIN_SYMBOLS`, `STABLECOIN_ADDRESSES`, and
 
 - `maxSlippagePct` is hard-clamped after LLM inference; the LLM cannot exceed the configured plan ceiling.
 - The Risk Agent emits typed `RiskFlag[]` with severity (`low | medium | high | critical`); any `critical` flag forces a Critic rejection.
-- The Executor's `SIMULATION_ONLY` flag is checked in addition to `DRY_RUN`, so signing requires both env vars to be explicitly set to `false`.
+- The Executor checks both `DRY_RUN` and `SIMULATION_ONLY`; any true value keeps execution in simulation mode.
 
 ---
 
@@ -372,7 +375,7 @@ pnpm dev
 - [`@copilotkit/runtime`](https://www.npmjs.com/package/@copilotkit/runtime) — Next.js API route adapter
 - [`@ag-ui/a2a-middleware`](https://www.npmjs.com/package/@ag-ui/a2a-middleware) — bridges AG-UI tool calls to A2A JSON-RPC
 - [`@ai-sdk/google`](https://www.npmjs.com/package/@ai-sdk/google) — Gemini provider for the orchestrator
-- [`next`](https://www.npmjs.com/package/next) 15 + [`react`](https://www.npmjs.com/package/react) 19 + [`tailwindcss`](https://www.npmjs.com/package/tailwindcss) v4
+- [`next`](https://www.npmjs.com/package/next) 16 + [`react`](https://www.npmjs.com/package/react) 19 + [`tailwindcss`](https://www.npmjs.com/package/tailwindcss) v4
 
 ---
 

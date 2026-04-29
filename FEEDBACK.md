@@ -110,6 +110,33 @@ This data is Uniswap-native, pool-level precise, and does not require a third-pa
 
 ---
 
+## Request 3 — Expose Version-Level Liquidity (v2/v3/v4) and User-Selectable Execution Paths
+
+### The gap
+
+When a token pair exists across multiple Uniswap versions, developers currently do not get a clear, official API surface that answers:
+
+- Which versions are available for this pair (`v2`, `v3`, `v4`)
+- How much liquidity is in each version right now
+- Which version should be selected for **swap** vs **add liquidity** workflows
+
+In practice, teams must stitch this together from third-party indexers or custom RPC logic. This creates inconsistent UX and makes it hard to provide users an explicit "choose the pool/version" step before execution.
+
+### What this blocks in product UX
+
+- **Version-aware swap routing**: user cannot reliably choose between v2/v3/v4 based on visible liquidity depth
+- **Version-aware LP creation**: user cannot compare liquidity and confidently choose where to add liquidity
+- **Single-surface integration**: swap and liquidity decisions are split across multiple data providers instead of one Uniswap-hosted interface
+
+### Our ask
+
+1. **Add a version-liquidity endpoint** (or skill) that returns per-pair pool availability and current liquidity by version (`v2`, `v3`, `v4`) and fee tier where applicable.
+2. **Expose explicit version selection in swap flow** so integrators can let users choose the desired pool version before quote/execution.
+3. **Add API support for add-liquidity transactions** (or a first-class liquidity API) so users can select version + fee tier + range and execute from the same API surface used for swaps.
+4. **Document a canonical decision flow**: discover pools by version -> compare liquidity/volume/fees -> user selects target -> execute swap or add-liquidity.
+
+---
+
 ## Summary
 
 | Feature           | Protocol support today                 | `uniswap-ai` skill      | Trading API endpoint |
@@ -119,7 +146,10 @@ This data is Uniswap-native, pool-level precise, and does not require a third-pa
 | Pool volume (24h) | ✅ v3 Subgraph `poolDayData.volumeUSD` | ❌ Missing              | ❌ Missing           |
 | Pool TVL          | ✅ v3 Subgraph `poolDayData.tvlUSD`    | ❌ Missing              | ❌ Missing           |
 | Pool fee revenue  | ✅ v3 Subgraph `poolDayData.feesUSD`   | ❌ Missing              | ❌ Missing           |
+| Version liquidity (v2/v3/v4) | ✅ Onchain + indexers can derive | ❌ Missing | ❌ Missing |
+| User-selectable version for swap | ⚠️ Partially possible, not first-class by pool/version discovery | ❌ Missing | ❌ Missing |
+| API-based add-liquidity execution | ✅ Protocol supports LP positions | ❌ Missing | ❌ Missing |
 
-Both features are fully supported at the protocol level. Surfacing them through `uniswap-ai` skills and/or the Trading API would significantly reduce the integration burden for developers building on Uniswap and would keep the ecosystem self-contained — removing the dependency on DeFiLlama and CoinGecko for data that Uniswap already produces natively.
+These capabilities are fully supported at the protocol level (or derivable from protocol-native data). Surfacing them through `uniswap-ai` skills and/or the Trading API would significantly reduce the integration burden for developers building on Uniswap and would keep the ecosystem self-contained — removing the dependency on DeFiLlama and CoinGecko for data that Uniswap already produces natively.
 
 We appreciate the work the team has put into `uniswap-ai` and the developer documentation, and we hope this feedback is useful.

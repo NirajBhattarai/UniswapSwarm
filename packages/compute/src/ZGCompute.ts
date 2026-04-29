@@ -200,6 +200,11 @@ export class ZGCompute {
 
     let headers: Record<string, string>;
     try {
+      await (
+        broker.inference.acknowledgeProviderSigner(
+          svc.providerAddress,
+        ) as Promise<unknown>
+      ).catch(() => null);
       headers = (await broker.inference.getRequestHeaders(
         svc.providerAddress,
       )) as unknown as Record<string, string>;
@@ -213,6 +218,11 @@ export class ZGCompute {
           `[Compute] Ledger error during infer — attempting auto-fund: ${msg}`,
         );
         await this.autoFundLedger();
+        await (
+          broker.inference.acknowledgeProviderSigner(
+            svc.providerAddress,
+          ) as Promise<unknown>
+        ).catch(() => null);
         headers = (await broker.inference.getRequestHeaders(
           svc.providerAddress,
         )) as unknown as Record<string, string>;
@@ -264,6 +274,11 @@ export class ZGCompute {
 
     let headers: Record<string, string>;
     try {
+      await (
+        broker.inference.acknowledgeProviderSigner(
+          svc.providerAddress,
+        ) as Promise<unknown>
+      ).catch(() => null);
       headers = (await broker.inference.getRequestHeaders(
         svc.providerAddress,
       )) as unknown as Record<string, string>;
@@ -277,6 +292,11 @@ export class ZGCompute {
           `[Compute] Ledger error during inferStream — attempting auto-fund: ${msg}`,
         );
         await this.autoFundLedger();
+        await (
+          broker.inference.acknowledgeProviderSigner(
+            svc.providerAddress,
+          ) as Promise<unknown>
+        ).catch(() => null);
         headers = (await broker.inference.getRequestHeaders(
           svc.providerAddress,
         )) as unknown as Record<string, string>;
@@ -304,7 +324,12 @@ export class ZGCompute {
 
     if (!res.ok || !res.body) {
       const text = await res.text();
-      throw new Error(`[Compute] Stream failed ${res.status}: ${text}`);
+      logger.warn(
+        `[Compute] Stream failed ${res.status}: ${text}. Falling back to non-stream path.`,
+      );
+      const fallback = await this.infer(systemPrompt, userPrompt, opts);
+      if (fallback) yield fallback;
+      return;
     }
 
     const reader = res.body.getReader();
@@ -343,13 +368,21 @@ export class ZGCompute {
     opts: InferOptions = {},
   ): Promise<T> {
     let raw = "";
-    for await (const chunk of this.inferStream(
-      systemPrompt,
-      userPrompt,
-      opts,
-    )) {
-      raw += chunk;
-      opts.onChunk?.(chunk);
+    try {
+      for await (const chunk of this.inferStream(
+        systemPrompt,
+        userPrompt,
+        opts,
+      )) {
+        raw += chunk;
+        opts.onChunk?.(chunk);
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.warn(
+        `[Compute] Stream path failed (${message}). Falling back to non-stream inference.`,
+      );
+      raw = await this.infer(systemPrompt, userPrompt, opts);
     }
 
     // 1. Strip markdown code fences if present

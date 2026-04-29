@@ -59,9 +59,18 @@ type TxRequestLike = {
 
 type SwapPrepareResponse = {
   approvalTx: TxRequestLike | null;
-  swapTx: TxRequestLike;
-  quote?: Record<string, unknown>;
+  /** Full /quote API response — execute route spreads this into the /swap body */
+  quoteResponse: Record<string, unknown>;
 };
+
+type SwapExecuteResponse =
+  | { swapTx: TxRequestLike; type?: never; orderHash?: never }
+  | {
+      type: "UNISWAPX";
+      orderHash: string | null;
+      requestId: string | null;
+      swapTx?: never;
+    };
 
 type WalletBalanceItem = {
   symbol: string;
@@ -504,6 +513,7 @@ export const SwarmChat: React.FC<SwarmChatProps> = ({ state, onState }) => {
           setApprovalSubmitting((prev) => ({ ...prev, [key]: true }));
           setApprovalErrors((prev) => ({ ...prev, [key]: null }));
           try {
+            // ── Step 1: prepare (check_approval + quote) ────────────────────
             const prepareRes = await fetch("/api/swap/prepare", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
@@ -516,7 +526,7 @@ export const SwarmChat: React.FC<SwarmChatProps> = ({ state, onState }) => {
               | SwapPrepareResponse
               | { error?: string };
 
-            if (!prepareRes.ok || !("swapTx" in preparePayload)) {
+            if (!prepareRes.ok || !("quoteResponse" in preparePayload)) {
               throw new Error(
                 (preparePayload as { error?: string }).error ??
                   `Swap preparation failed (${prepareRes.status})`,
@@ -526,6 +536,7 @@ export const SwarmChat: React.FC<SwarmChatProps> = ({ state, onState }) => {
             const ethersProvider = new BrowserProvider(walletProvider as any);
             const signer = await ethersProvider.getSigner();
 
+            // ── Step 2: ERC20 → Permit2 approval (if needed) ───────────────
             if (preparePayload.approvalTx) {
               const approvalTx = await signer.sendTransaction({
                 to: preparePayload.approvalTx.to,
@@ -537,11 +548,95 @@ export const SwarmChat: React.FC<SwarmChatProps> = ({ state, onState }) => {
               await approvalTx.wait();
             }
 
+            // ── Step 3: sign Permit2 EIP-712 data (off-chain, no tx) ────────
+            // permitData lives inside quoteResponse. For CLASSIC routes the
+            // Universal Router needs the signature + permitData in the /swap
+            // body. For UniswapX (DUTCH_V2/V3/PRIORITY) only the signature is
+            // needed — execute route handles routing-aware body construction.
+            let permitSignature: string | null = null;
+            const permitData = preparePayload.quoteResponse["permitData"];
+            if (permitData && typeof permitData === "object") {
+              const pd = permitData as {
+                domain: Parameters<typeof signer.signTypedData>[0];
+                types: Parameters<typeof signer.signTypedData>[1];
+                values: Parameters<typeof signer.signTypedData>[2];
+              };
+              permitSignature = await signer.signTypedData(
+                pd.domain,
+                pd.types,
+                pd.values,
+              );
+            }
+
+            // ── Step 4: get swap calldata from Trading API ──────────────────
+            const executeRes = await fetch("/api/swap/execute", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                quoteResponse: preparePayload.quoteResponse,
+                signature: permitSignature,
+              }),
+            });
+            const executePayload = (await executeRes.json()) as
+              | SwapExecuteResponse
+              | { error?: string };
+
+            if (!executeRes.ok) {
+              throw new Error(
+                (executePayload as { error?: string }).error ??
+                  `Swap execute failed (${executeRes.status})`,
+              );
+            }
+
+            // ── Step 5a: UniswapX — order submitted by API, no user tx ──────
+            // For Dutch orders the Trading API submits the signed order to
+            // UniswapX fillers. No transaction is broadcast by the user.
+            if (
+              "type" in executePayload &&
+              executePayload.type === "UNISWAPX"
+            ) {
+              const orderHash = executePayload.orderHash ?? "(pending)";
+              setApprovalStates((prev) => ({
+                ...prev,
+                [key]: { approved: true, rejected: false },
+              }));
+              onState({
+                ...state,
+                execution: {
+                  success: true,
+                  dryRun: false,
+                  txHash: orderHash,
+                  pair:
+                    strategy.tokenInSymbol && strategy.tokenOutSymbol
+                      ? `${strategy.tokenInSymbol} → ${strategy.tokenOutSymbol}`
+                      : undefined,
+                  rationale:
+                    "UniswapX order signed and submitted to fillers — no gas paid by user.",
+                },
+              });
+              respond?.({
+                approved: true,
+                executedByUserWallet: true,
+                txHash: orderHash,
+                message:
+                  "UniswapX order submitted. Fillers will execute on-chain. Do not call Executor Agent again.",
+              });
+              return;
+            }
+
+            // ── Step 5b: Classic — broadcast the swap tx ────────────────────
+            if (!("swapTx" in executePayload) || !executePayload.swapTx) {
+              throw new Error(
+                (executePayload as { error?: string }).error ??
+                  "Swap execute failed: no transaction returned",
+              );
+            }
+
             const swapTx = await signer.sendTransaction({
-              to: preparePayload.swapTx.to,
-              data: preparePayload.swapTx.data,
-              value: preparePayload.swapTx.value
-                ? BigInt(preparePayload.swapTx.value)
+              to: executePayload.swapTx.to,
+              data: executePayload.swapTx.data,
+              value: executePayload.swapTx.value
+                ? BigInt(executePayload.swapTx.value)
                 : BigInt(0),
             });
             await swapTx.wait();

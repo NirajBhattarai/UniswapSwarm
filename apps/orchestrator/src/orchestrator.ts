@@ -90,6 +90,14 @@ export class SwarmOrchestrator {
     return created;
   }
 
+  private async hydrateSessionMemory(
+    sessionId: string,
+  ): Promise<SessionContext> {
+    const ctx = this.getOrCreateSessionContext(sessionId);
+    await ctx.memory.hydrateFromStorage();
+    return ctx;
+  }
+
   async init(): Promise<void> {
     // Initialise 0G Compute and 0G Storage in parallel
     await Promise.all([this.compute.init(), this.zgStorage.init()]);
@@ -106,13 +114,12 @@ export class SwarmOrchestrator {
   ): Promise<SwarmCycleState> {
     const cycleId = uuidv4();
     const state: SwarmCycleState = { cycleId, startedAt: Date.now() };
-    const ctx = this.getOrCreateSessionContext(sessionId);
+    const ctx = await this.hydrateSessionMemory(sessionId);
     logger.info(
       `\n${"=".repeat(60)}\n[Swarm] Cycle ${cycleId} starting (session=${sessionId}${walletAddress ? ` wallet=${walletAddress}` : ""})\n${"=".repeat(60)}`,
     );
 
-    // Clear in-process cache for this cycle (0G Storage entries are permanent)
-    ctx.memory.clear();
+    // Keep prior memory so agent prompts can use persistent session context.
 
     try {
       // 1. Researcher runs first — fetches live on-chain data + wallet holdings, writes researcher/report
@@ -161,7 +168,7 @@ export class SwarmOrchestrator {
 
     try {
       // Non-streaming agents emit agent_start / agent_done pairs
-      for (const [agentId, runFn] of this.buildNonStreamingSteps(
+      for (const [agentId, runFn] of await this.buildNonStreamingSteps(
         cycleId,
         sessionId,
         walletAddress,
@@ -191,17 +198,16 @@ export class SwarmOrchestrator {
     }
   }
 
-  private buildNonStreamingSteps(
+  private async buildNonStreamingSteps(
     _cycleId: string,
     sessionId: string,
     walletAddress?: string,
-  ): Array<[string, () => Promise<void>]> {
+  ): Promise<Array<[string, () => Promise<void>]>> {
     const state: SwarmCycleState = {
       cycleId: _cycleId,
       startedAt: Date.now(),
     };
-    const ctx = this.getOrCreateSessionContext(sessionId);
-    ctx.memory.clear();
+    const ctx = await this.hydrateSessionMemory(sessionId);
     this.cycleHistory.push(state);
 
     return [
@@ -260,7 +266,8 @@ export class SwarmOrchestrator {
     logger.info(
       `[Orchestrator] 🔬 Researcher Agent called for session ${sessionId}${walletAddress ? ` (wallet=${walletAddress})` : ""}`,
     );
-    return this.getOrCreateSessionContext(sessionId).researcher.run(
+    const ctx = await this.hydrateSessionMemory(sessionId);
+    return ctx.researcher.run(
       goal ?? GOAL,
       onChunk ? { onChunk } : {},
       walletAddress,
@@ -275,10 +282,8 @@ export class SwarmOrchestrator {
     logger.info(
       `[Orchestrator] 📋 Planner Agent called for session ${sessionId}`,
     );
-    return this.getOrCreateSessionContext(sessionId).planner.run(
-      goal ?? GOAL,
-      onChunk ? { onChunk } : {},
-    );
+    const ctx = await this.hydrateSessionMemory(sessionId);
+    return ctx.planner.run(goal ?? GOAL, onChunk ? { onChunk } : {});
   }
 
   async runRisk(
@@ -286,9 +291,8 @@ export class SwarmOrchestrator {
     onChunk?: InferOptions["onChunk"],
   ): Promise<RiskAssessment[]> {
     logger.info(`[Orchestrator] 🔍 Risk Agent called for session ${sessionId}`);
-    return this.getOrCreateSessionContext(sessionId).risk.run(
-      onChunk ? { onChunk } : {},
-    );
+    const ctx = await this.hydrateSessionMemory(sessionId);
+    return ctx.risk.run(onChunk ? { onChunk } : {});
   }
 
   async runStrategy(
@@ -299,10 +303,8 @@ export class SwarmOrchestrator {
     logger.info(
       `[Orchestrator] 🎯 Strategy Agent called for session ${sessionId}`,
     );
-    return this.getOrCreateSessionContext(sessionId).strategy.run(
-      onChunk ? { onChunk } : {},
-      walletAddress,
-    );
+    const ctx = await this.hydrateSessionMemory(sessionId);
+    return ctx.strategy.run(onChunk ? { onChunk } : {}, walletAddress);
   }
 
   async runCritic(
@@ -312,35 +314,32 @@ export class SwarmOrchestrator {
     logger.info(
       `[Orchestrator] 🎭 Critic Agent called for session ${sessionId}`,
     );
-    return this.getOrCreateSessionContext(sessionId).critic.run(
-      onChunk ? { onChunk } : {},
-    );
+    const ctx = await this.hydrateSessionMemory(sessionId);
+    return ctx.critic.run(onChunk ? { onChunk } : {});
   }
 
   async runExecutor(sessionId: string): Promise<ExecutionResult> {
     logger.info(
       `[Orchestrator] ⚡ Executor Agent called for session ${sessionId}`,
     );
-    return this.getOrCreateSessionContext(sessionId).executor.run();
+    const ctx = await this.hydrateSessionMemory(sessionId);
+    return ctx.executor.run();
   }
 
   async fetchPrices(
     sessionId: string,
     tokens: string[],
   ): Promise<PriceQuoteResponse> {
-    return this.getOrCreateSessionContext(
-      sessionId,
-    ).researcher.fetchTokenPrices(tokens);
+    const ctx = await this.hydrateSessionMemory(sessionId);
+    return ctx.researcher.fetchTokenPrices(tokens);
   }
 
   async fetchMarketData(
     sessionId: string,
     tokens: string[],
   ): Promise<Record<string, CoinGeckoMarketData>> {
-    const map =
-      await this.getOrCreateSessionContext(
-        sessionId,
-      ).researcher.fetchCoinGeckoMarketData(tokens);
+    const ctx = await this.hydrateSessionMemory(sessionId);
+    const map = await ctx.researcher.fetchCoinGeckoMarketData(tokens);
     return Object.fromEntries(map.entries());
   }
 

@@ -154,21 +154,57 @@ export class ExecutorAgent {
         tokenOut: strategy.tokenOut,
         amount: strategy.amountInWei,
         type: "EXACT_INPUT",
-        tokenInChainId: 1,
-        tokenOutChainId: 1,
+        // tokenInChainId / tokenOutChainId MUST be strings per the Trading API spec.
+        tokenInChainId: "1",
+        tokenOutChainId: "1",
         swapper: wallet.address,
         slippageTolerance: strategy.slippagePct,
-        // Ask API to disable permit signing requirements in this server flow.
-        generatePermitAsTransaction: true,
       });
 
-      const quote = this.extractQuote(quoteResponse);
-      if (!quote) {
-        throw new Error("Trade API /quote did not return a quote payload");
+      // Build /swap body by spreading the full quote response per the Trading
+      // API spec. NEVER wrap in { quote: ... } and NEVER send permitData: null.
+      // Routing-aware rules (uniswap-ai SKILL.md):
+      //  CLASSIC:  spread + signature + permitData (both or neither)
+      //  UniswapX: spread + signature only (permitData causes schema rejection)
+      const { permitData, permitTransaction, ...cleanQuote } =
+        quoteResponse as {
+          permitData?: Record<string, unknown> | null;
+          permitTransaction?: unknown;
+          [key: string]: unknown;
+        };
+
+      const swapBody: Record<string, unknown> = { ...cleanQuote };
+
+      const routing = (quoteResponse["routing"] as string) ?? "";
+      const isUniswapX =
+        routing === "DUTCH_V2" ||
+        routing === "DUTCH_V3" ||
+        routing === "PRIORITY";
+
+      // Server wallets can sign EIP-712 typed data via ethers Wallet.signTypedData.
+      if (permitData && typeof permitData === "object") {
+        const pd = permitData as {
+          domain: Record<string, unknown>;
+          types: Record<string, unknown>;
+          values: Record<string, unknown>;
+        };
+        const signature = await wallet.signTypedData(
+          pd.domain as Parameters<typeof wallet.signTypedData>[0],
+          pd.types as Parameters<typeof wallet.signTypedData>[1],
+          pd.values as Parameters<typeof wallet.signTypedData>[2],
+        );
+        if (isUniswapX) {
+          // UniswapX: order encoded in quote.encodedOrder; API schema rejects permitData.
+          swapBody.signature = signature;
+        } else {
+          // CLASSIC: Universal Router needs permitData to verify Permit2 on-chain.
+          swapBody.signature = signature;
+          swapBody.permitData = permitData;
+        }
       }
 
       // 3) Convert quote into executable calldata.
-      const swapResponse = await this.callTradeApi("swap", { quote });
+      const swapResponse = await this.callTradeApi("swap", swapBody);
       const swapTx = this.extractTxRequest(swapResponse);
       if (!swapTx) {
         throw new Error(
@@ -182,7 +218,11 @@ export class ExecutorAgent {
       const reverted = receipt.status !== 1;
 
       const amountOut =
-        this.extractOutputAmount(quote) ?? strategy.minAmountOutWei ?? null;
+        this.extractOutputAmount(
+          (quoteResponse["quote"] as Record<string, unknown>) ?? {},
+        ) ??
+        strategy.minAmountOutWei ??
+        null;
       result = {
         dryRun: false,
         txHash,
@@ -191,8 +231,12 @@ export class ExecutorAgent {
         amountOut,
         gasUsed: receipt.gasUsed.toString(),
         priceImpactPct:
-          typeof quote["priceImpact"] === "number"
-            ? (quote["priceImpact"] as number)
+          typeof (quoteResponse["quote"] as Record<string, unknown>)?.[
+            "priceImpact"
+          ] === "number"
+            ? ((quoteResponse["quote"] as Record<string, unknown>)[
+                "priceImpact"
+              ] as number)
             : null,
         executedAt: Date.now(),
         ...(reverted ? { error: "Transaction reverted" } : {}),
@@ -272,22 +316,24 @@ export class ExecutorAgent {
     return raw.startsWith("0x") ? BigInt(raw) : BigInt(raw);
   }
 
-  private extractQuote(
-    payload: Record<string, unknown>,
-  ): Record<string, unknown> | null {
-    const quote = payload["quote"];
-    if (typeof quote === "object" && quote !== null) {
-      return quote as Record<string, unknown>;
-    }
-    return null;
-  }
-
   private extractOutputAmount(quote: Record<string, unknown>): string | null {
+    // CLASSIC: quote.output.amount
     const output = quote["output"];
     if (typeof output === "object" && output !== null) {
       const amount = (output as Record<string, unknown>)["amount"];
       if (typeof amount === "string" && amount.trim().length > 0) {
         return amount;
+      }
+    }
+    // UniswapX: quote.orderInfo.outputs[0].startAmount (best-case fill)
+    const orderInfo = quote["orderInfo"];
+    if (typeof orderInfo === "object" && orderInfo !== null) {
+      const outputs = (orderInfo as Record<string, unknown>)["outputs"];
+      if (Array.isArray(outputs) && outputs.length > 0) {
+        const startAmount = (outputs[0] as Record<string, unknown>)[
+          "startAmount"
+        ];
+        if (typeof startAmount === "string") return startAmount;
       }
     }
     return null;

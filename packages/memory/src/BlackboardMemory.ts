@@ -17,6 +17,7 @@ export class BlackboardMemory {
   private readonly cache = new Map<string, MemoryEntry>();
   private readonly storage: ZGStorage | null;
   private readonly namespace: string | null;
+  private hydrated = false;
 
   constructor(storage?: ZGStorage, namespace?: string) {
     this.storage = storage ?? null;
@@ -38,10 +39,12 @@ export class BlackboardMemory {
     const json = JSON.stringify(value);
     const storageKey = this.scopedKey(key);
     const hash = this.storage
-      ? await this.storage.store(agentId, storageKey, value).catch(() => {
-          const h = crypto.createHash("sha256").update(json).digest("hex");
-          return `local:${h}`;
-        })
+      ? await this.storage
+          .store(agentId, storageKey, value, { role })
+          .catch(() => {
+            const h = crypto.createHash("sha256").update(json).digest("hex");
+            return `local:${h}`;
+          })
       : `local:${crypto.createHash("sha256").update(json).digest("hex")}`;
 
     const entry: MemoryEntry = {
@@ -100,9 +103,43 @@ export class BlackboardMemory {
   /** Drop all entries — call at the start of each cycle */
   clear(): void {
     this.cache.clear();
+    this.hydrated = false;
   }
 
   get size(): number {
     return this.cache.size;
+  }
+
+  async hydrateFromStorage(): Promise<number> {
+    if (!this.storage) return 0;
+    if (this.hydrated) return 0;
+
+    const prefix = this.namespace ? `${this.namespace}/` : "";
+    const persisted = await this.storage.listByPrefix(prefix);
+    let loaded = 0;
+
+    for (const item of persisted) {
+      const key = this.namespace
+        ? item.tag.replace(`${this.namespace}/`, "")
+        : item.tag;
+      if (!key) continue;
+      this.cache.set(key, {
+        key,
+        agentId: item.agentId,
+        role: item.role,
+        value: item.data,
+        hash: item.rootHash,
+        ts: item.ts,
+      });
+      loaded += 1;
+    }
+
+    this.hydrated = true;
+    if (loaded > 0) {
+      logger.info(
+        `[Memory${this.namespace ? `:${this.namespace}` : ""}] hydrated ${loaded} key(s) from persistent index`,
+      );
+    }
+    return loaded;
   }
 }
