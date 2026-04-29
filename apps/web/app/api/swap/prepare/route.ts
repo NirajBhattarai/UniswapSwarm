@@ -146,9 +146,10 @@ export async function POST(req: NextRequest) {
       apiKey,
     );
 
-    if (typeof quoteResponse["routing"] !== "string") {
+    const quote = quoteResponse["quote"];
+    if (typeof quote !== "object" || quote === null) {
       return NextResponse.json(
-        { error: "Trade API /quote response missing routing field" },
+        { error: "Trade API quote payload missing" },
         { status: 502 },
       );
     }

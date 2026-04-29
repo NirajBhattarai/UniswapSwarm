@@ -148,7 +148,10 @@ export class ZGStorage {
     }
   }
 
-  private async persistRecord(key: string, record: PersistedRecord): Promise<void> {
+  private async persistRecord(
+    key: string,
+    record: PersistedRecord,
+  ): Promise<void> {
     this.persistWriteQueue = this.persistWriteQueue
       .then(async () => {
         const all = await this.readPersistedRecords();
@@ -157,12 +160,16 @@ export class ZGStorage {
       })
       .catch((error) => {
         const message = error instanceof Error ? error.message : String(error);
-        logger.warn(`[ZGStorage] Failed to persist local memory index: ${message}`);
+        logger.warn(
+          `[ZGStorage] Failed to persist local memory index: ${message}`,
+        );
       });
     await this.persistWriteQueue;
   }
 
-  private async readPersistedRecords(): Promise<Record<string, PersistedRecord>> {
+  private async readPersistedRecords(): Promise<
+    Record<string, PersistedRecord>
+  > {
     try {
       const raw = await readFile(this.persistPath, "utf8");
       const parsed = JSON.parse(raw) as unknown;

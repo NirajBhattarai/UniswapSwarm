@@ -90,7 +90,9 @@ export class SwarmOrchestrator {
     return created;
   }
 
-  private async hydrateSessionMemory(sessionId: string): Promise<SessionContext> {
+  private async hydrateSessionMemory(
+    sessionId: string,
+  ): Promise<SessionContext> {
     const ctx = this.getOrCreateSessionContext(sessionId);
     await ctx.memory.hydrateFromStorage();
     return ctx;
@@ -281,10 +283,7 @@ export class SwarmOrchestrator {
       `[Orchestrator] 📋 Planner Agent called for session ${sessionId}`,
     );
     const ctx = await this.hydrateSessionMemory(sessionId);
-    return ctx.planner.run(
-      goal ?? GOAL,
-      onChunk ? { onChunk } : {},
-    );
+    return ctx.planner.run(goal ?? GOAL, onChunk ? { onChunk } : {});
   }
 
   async runRisk(
@@ -293,9 +292,7 @@ export class SwarmOrchestrator {
   ): Promise<RiskAssessment[]> {
     logger.info(`[Orchestrator] 🔍 Risk Agent called for session ${sessionId}`);
     const ctx = await this.hydrateSessionMemory(sessionId);
-    return ctx.risk.run(
-      onChunk ? { onChunk } : {},
-    );
+    return ctx.risk.run(onChunk ? { onChunk } : {});
   }
 
   async runStrategy(
@@ -307,10 +304,7 @@ export class SwarmOrchestrator {
       `[Orchestrator] 🎯 Strategy Agent called for session ${sessionId}`,
     );
     const ctx = await this.hydrateSessionMemory(sessionId);
-    return ctx.strategy.run(
-      onChunk ? { onChunk } : {},
-      walletAddress,
-    );
+    return ctx.strategy.run(onChunk ? { onChunk } : {}, walletAddress);
   }
 
   async runCritic(
@@ -321,9 +315,7 @@ export class SwarmOrchestrator {
       `[Orchestrator] 🎭 Critic Agent called for session ${sessionId}`,
     );
     const ctx = await this.hydrateSessionMemory(sessionId);
-    return ctx.critic.run(
-      onChunk ? { onChunk } : {},
-    );
+    return ctx.critic.run(onChunk ? { onChunk } : {});
   }
 
   async runExecutor(sessionId: string): Promise<ExecutionResult> {

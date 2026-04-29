@@ -39,10 +39,12 @@ export class BlackboardMemory {
     const json = JSON.stringify(value);
     const storageKey = this.scopedKey(key);
     const hash = this.storage
-      ? await this.storage.store(agentId, storageKey, value, { role }).catch(() => {
-          const h = crypto.createHash("sha256").update(json).digest("hex");
-          return `local:${h}`;
-        })
+      ? await this.storage
+          .store(agentId, storageKey, value, { role })
+          .catch(() => {
+            const h = crypto.createHash("sha256").update(json).digest("hex");
+            return `local:${h}`;
+          })
       : `local:${crypto.createHash("sha256").update(json).digest("hex")}`;
 
     const entry: MemoryEntry = {
