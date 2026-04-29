@@ -183,7 +183,7 @@ function buildCycleStateFromMemory(
           SwarmCycleState["critique"]
         >;
       }
-    } else if (entry.key === "executor/execution") {
+    } else if (entry.key === "executor/result") {
       if (entry.value !== undefined) {
         state.execution = entry.value as NonNullable<
           SwarmCycleState["execution"]

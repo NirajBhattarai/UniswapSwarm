@@ -1,6 +1,16 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import type { SwarmAggregateState } from "../types";
+
+type PersistedCycleState = {
+  research?: SwarmAggregateState["research"];
+  plan?: SwarmAggregateState["plan"];
+  riskAssessments?: SwarmAggregateState["risk"];
+  strategy?: SwarmAggregateState["strategy"];
+  critique?: SwarmAggregateState["critique"];
+  execution?: SwarmAggregateState["execution"];
+};
 
 type SessionSummary = {
   sessionId: string;
@@ -18,10 +28,12 @@ type CycleSummary = {
   startedAt: number;
   completedAt: number | null;
   status: "completed" | "failed";
+  state: PersistedCycleState;
 };
 
 type SwarmHistoryPanelProps = {
   walletAddress?: string;
+  onLoadCycleState?: (next: SwarmAggregateState) => void;
 };
 
 function formatTs(ts?: number | null): string {
@@ -29,7 +41,23 @@ function formatTs(ts?: number | null): string {
   return new Date(ts).toLocaleString();
 }
 
-export function SwarmHistoryPanel({ walletAddress }: SwarmHistoryPanelProps) {
+function cycleStateToAggregate(
+  state: PersistedCycleState,
+): SwarmAggregateState {
+  return {
+    research: state.research,
+    plan: state.plan,
+    risk: state.riskAssessments,
+    strategy: state.strategy,
+    critique: state.critique,
+    execution: state.execution,
+  };
+}
+
+export function SwarmHistoryPanel({
+  walletAddress,
+  onLoadCycleState,
+}: SwarmHistoryPanelProps) {
   const baseUrl =
     process.env.NEXT_PUBLIC_ORCHESTRATOR_URL ?? "http://localhost:4000";
   const ownerKey = useMemo(
@@ -44,6 +72,7 @@ export function SwarmHistoryPanel({ walletAddress }: SwarmHistoryPanelProps) {
     null,
   );
   const [cycles, setCycles] = useState<CycleSummary[]>([]);
+  const [selectedCycleId, setSelectedCycleId] = useState<string | null>(null);
   const [loadingSessions, setLoadingSessions] = useState(false);
   const [loadingCycles, setLoadingCycles] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -86,11 +115,6 @@ export function SwarmHistoryPanel({ walletAddress }: SwarmHistoryPanelProps) {
           ).values(),
         );
         setSessions(rows);
-        setSelectedSessionId((current) =>
-          current && rows.some((s) => s.sessionId === current)
-            ? current
-            : (rows[0]?.sessionId ?? null),
-        );
       } catch (err) {
         if (cancelled) return;
         const msg = err instanceof Error ? err.message : String(err);
@@ -108,6 +132,7 @@ export function SwarmHistoryPanel({ walletAddress }: SwarmHistoryPanelProps) {
   useEffect(() => {
     if (!selectedSessionId) {
       setCycles([]);
+      setSelectedCycleId(null);
       return;
     }
     let cancelled = false;
@@ -127,7 +152,10 @@ export function SwarmHistoryPanel({ walletAddress }: SwarmHistoryPanelProps) {
             payload.error ?? `Failed to load cycles (${res.status})`,
           );
         }
-        if (!cancelled) setCycles(payload.data ?? []);
+        if (cancelled) return;
+        const nextCycles = payload.data ?? [];
+        setCycles(nextCycles);
+        setSelectedCycleId(null);
       } catch (err) {
         if (cancelled) return;
         const msg = err instanceof Error ? err.message : String(err);
@@ -140,7 +168,7 @@ export function SwarmHistoryPanel({ walletAddress }: SwarmHistoryPanelProps) {
     return () => {
       cancelled = true;
     };
-  }, [baseUrl, selectedSessionId]);
+  }, [baseUrl, onLoadCycleState, selectedSessionId]);
 
   return (
     <div className="h-full min-h-0 rounded-xl border border-[#d9dbe5] bg-white/70 p-3">
@@ -206,26 +234,41 @@ export function SwarmHistoryPanel({ walletAddress }: SwarmHistoryPanelProps) {
               {cycles.map((cycle) => (
                 <li
                   key={cycle.cycleId}
-                  className="rounded-md border border-slate-200 bg-white px-2 py-1.5 text-xs"
+                  className={`rounded-md border px-2 py-1.5 text-xs ${
+                    selectedCycleId === cycle.cycleId
+                      ? "border-cyan-300 bg-cyan-50"
+                      : "border-slate-200 bg-white"
+                  }`}
                 >
-                  <p className="font-semibold text-slate-800">
-                    {cycle.cycleId.slice(0, 8)}...{cycle.cycleId.slice(-4)}
-                  </p>
-                  <p className="text-[11px] text-slate-500">
-                    start: {formatTs(cycle.startedAt)}
-                  </p>
-                  <p className="text-[11px] text-slate-500">
-                    end: {formatTs(cycle.completedAt)}
-                  </p>
-                  <p
-                    className={`mt-1 inline-flex rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${
-                      cycle.status === "completed"
-                        ? "bg-emerald-100 text-emerald-700"
-                        : "bg-rose-100 text-rose-700"
-                    }`}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedCycleId(cycle.cycleId);
+                      if (onLoadCycleState) {
+                        onLoadCycleState(cycleStateToAggregate(cycle.state));
+                      }
+                    }}
+                    className="w-full text-left"
                   >
-                    {cycle.status}
-                  </p>
+                    <p className="font-semibold text-slate-800">
+                      {cycle.cycleId.slice(0, 8)}...{cycle.cycleId.slice(-4)}
+                    </p>
+                    <p className="text-[11px] text-slate-500">
+                      start: {formatTs(cycle.startedAt)}
+                    </p>
+                    <p className="text-[11px] text-slate-500">
+                      end: {formatTs(cycle.completedAt)}
+                    </p>
+                    <p
+                      className={`mt-1 inline-flex rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${
+                        cycle.status === "completed"
+                          ? "bg-emerald-100 text-emerald-700"
+                          : "bg-rose-100 text-rose-700"
+                      }`}
+                    >
+                      {cycle.status}
+                    </p>
+                  </button>
                 </li>
               ))}
             </ul>

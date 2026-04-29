@@ -138,7 +138,7 @@ cp .env.example .env
 | `COPILOTKIT_MODEL`                   | no              | Gemini model used by the orchestrator (default: `gemini-2.5-flash`).                                      |
 | `NEXT_PUBLIC_COPILOTKIT_RUNTIME_URL` | no              | Frontend → CopilotKit runtime URL (default: `/api/copilotkit`).                                           |
 | `NEXT_PUBLIC_ORCHESTRATOR_URL`       | no              | Frontend → orchestrator REST/A2A base URL (default: `http://localhost:4000`).                             |
-| `NEXT_PUBLIC_REOWN_PROJECT_ID`       | no              | Reown AppKit project ID for wallet connect/signature flows in the web UI.                                  |
+| `NEXT_PUBLIC_REOWN_PROJECT_ID`       | no              | Reown AppKit project ID for wallet connect/signature flows in the web UI.                                 |
 | `A2A_PUBLIC_BASE_URL`                | no              | Public URL embedded in agent cards. Defaults to `http://localhost:${PORT}`.                               |
 | `ORCHESTRATOR_URL`                   | no              | Base URL for A2A agent endpoints (default: `http://localhost:4000`). All agents are accessible as routes. |
 | `RESEARCHER_AGENT_URL`, etc.         | no              | Per-agent URL overrides for the web app. Defaults to `${ORCHESTRATOR_URL}/a2a/agents/<agent-id>`.         |

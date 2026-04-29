@@ -139,16 +139,16 @@ In practice, teams must stitch this together from third-party indexers or custom
 
 ## Summary
 
-| Feature           | Protocol support today                 | `uniswap-ai` skill      | Trading API endpoint |
-| ----------------- | -------------------------------------- | ----------------------- | -------------------- |
-| TWAP price (v3)   | ✅ `pool.observe()` + `OracleLibrary`  | ❌ Missing              | ❌ Missing           |
-| TWAP hook (v4)    | ⚠️ Requires custom `afterSwap` hook    | ❌ No reference example | ❌ N/A               |
-| Pool volume (24h) | ✅ v3 Subgraph `poolDayData.volumeUSD` | ❌ Missing              | ❌ Missing           |
-| Pool TVL          | ✅ v3 Subgraph `poolDayData.tvlUSD`    | ❌ Missing              | ❌ Missing           |
-| Pool fee revenue  | ✅ v3 Subgraph `poolDayData.feesUSD`   | ❌ Missing              | ❌ Missing           |
-| Version liquidity (v2/v3/v4) | ✅ Onchain + indexers can derive | ❌ Missing | ❌ Missing |
-| User-selectable version for swap | ⚠️ Partially possible, not first-class by pool/version discovery | ❌ Missing | ❌ Missing |
-| API-based add-liquidity execution | ✅ Protocol supports LP positions | ❌ Missing | ❌ Missing |
+| Feature                           | Protocol support today                                           | `uniswap-ai` skill      | Trading API endpoint |
+| --------------------------------- | ---------------------------------------------------------------- | ----------------------- | -------------------- |
+| TWAP price (v3)                   | ✅ `pool.observe()` + `OracleLibrary`                            | ❌ Missing              | ❌ Missing           |
+| TWAP hook (v4)                    | ⚠️ Requires custom `afterSwap` hook                              | ❌ No reference example | ❌ N/A               |
+| Pool volume (24h)                 | ✅ v3 Subgraph `poolDayData.volumeUSD`                           | ❌ Missing              | ❌ Missing           |
+| Pool TVL                          | ✅ v3 Subgraph `poolDayData.tvlUSD`                              | ❌ Missing              | ❌ Missing           |
+| Pool fee revenue                  | ✅ v3 Subgraph `poolDayData.feesUSD`                             | ❌ Missing              | ❌ Missing           |
+| Version liquidity (v2/v3/v4)      | ✅ Onchain + indexers can derive                                 | ❌ Missing              | ❌ Missing           |
+| User-selectable version for swap  | ⚠️ Partially possible, not first-class by pool/version discovery | ❌ Missing              | ❌ Missing           |
+| API-based add-liquidity execution | ✅ Protocol supports LP positions                                | ❌ Missing              | ❌ Missing           |
 
 These capabilities are fully supported at the protocol level (or derivable from protocol-native data). Surfacing them through `uniswap-ai` skills and/or the Trading API would significantly reduce the integration burden for developers building on Uniswap and would keep the ecosystem self-contained — removing the dependency on DeFiLlama and CoinGecko for data that Uniswap already produces natively.
 

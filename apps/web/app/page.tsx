@@ -127,7 +127,10 @@ export default function Home() {
           <div className="min-h-0 flex-1 overflow-hidden p-4">
             <div className="grid h-full min-h-0 grid-rows-[minmax(0,2fr)_minmax(0,1fr)] gap-3">
               <SwarmAgentOutputs state={state} />
-              <SwarmHistoryPanel walletAddress={address} />
+              <SwarmHistoryPanel
+                walletAddress={address}
+                onLoadCycleState={(next) => setState(next)}
+              />
             </div>
           </div>
         </section>

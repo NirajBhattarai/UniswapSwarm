@@ -94,7 +94,18 @@ export class SwarmOrchestrator {
     sessionId: string,
   ): Promise<SessionContext> {
     const ctx = this.getOrCreateSessionContext(sessionId);
-    await ctx.memory.hydrateFromStorage();
+    const hydrateFn = (
+      ctx.memory as BlackboardMemory & {
+        hydrateFromStorage?: () => Promise<number>;
+      }
+    ).hydrateFromStorage;
+    if (typeof hydrateFn === "function") {
+      await hydrateFn.call(ctx.memory);
+    } else {
+      logger.warn(
+        `[Orchestrator] Memory hydrate skipped for session ${sessionId}: hydrateFromStorage() is unavailable in the loaded @swarm/memory build`,
+      );
+    }
     return ctx;
   }
 
