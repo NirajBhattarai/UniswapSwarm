@@ -52,6 +52,14 @@ export const SwarmConfigSchema = z.object({
   // Swarm behaviour
   CYCLE_INTERVAL_MS: z.coerce.number().default(300_000), // 5 min between cycles
   PORT: z.coerce.number().default(4000),
+
+  // Optional DynamoDB history persistence
+  DYNAMODB_REGION: z.string().default(""),
+  DYNAMODB_HISTORY_TABLE: z.string().default(""),
+  DYNAMODB_HISTORY_GSI_USER: z.string().default("GSI1"),
+  AWS_ACCESS_KEY_ID: z.string().default(""),
+  AWS_SECRET_ACCESS_KEY: z.string().default(""),
+  AWS_SESSION_TOKEN: z.string().default(""),
 });
 
 export type SwarmConfig = z.infer<typeof SwarmConfigSchema>;

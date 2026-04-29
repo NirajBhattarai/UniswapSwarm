@@ -21,6 +21,8 @@ import { v4 as uuidv4 } from "uuid";
 import { logger } from "@swarm/shared";
 import type { SwarmOrchestrator } from "./orchestrator";
 
+const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
+
 /**
  * Each Uniswap Swarm agent is exposed as an A2A endpoint on the same port
  * with different routes:
@@ -150,10 +152,21 @@ export type AgentStorageWrite = {
   sizeBytes: number;
 };
 
+export type AgentExecutionHookParams = {
+  agentId: SwarmA2AAgentId;
+  sessionId: string;
+  payload: unknown;
+  walletAddress?: string;
+  runError?: string;
+};
+
 class SwarmAgentExecutor implements AgentExecutor {
   constructor(
     private readonly orchestrator: SwarmOrchestrator,
     private readonly agent: AgentDescriptor,
+    private readonly onAgentExecuted?: (
+      params: AgentExecutionHookParams,
+    ) => Promise<void> | void,
   ) {}
 
   async execute(
@@ -161,13 +174,14 @@ class SwarmAgentExecutor implements AgentExecutor {
     eventBus: ExecutionEventBus,
   ): Promise<void> {
     const userText = extractUserText(requestContext);
+    const walletAddress = extractWalletAddress(userText);
     // Use a simple hash of the first few chars of the contextId to create
     // a semi-stable session that will likely be the same for related calls
     // in a short time window. This is a heuristic approach.
     const sessionId = extractStableSessionId(requestContext);
 
     logger.info(
-      `[A2A] ${this.agent.cardName} called with sessionId=${sessionId} (contextId=${requestContext.contextId})`,
+      `[A2A] ${this.agent.cardName} called with sessionId=${sessionId}${walletAddress ? ` wallet=${walletAddress}` : ""} (contextId=${requestContext.contextId})`,
     );
 
     // Capture timestamp BEFORE running so we can identify any memory entries
@@ -180,7 +194,7 @@ class SwarmAgentExecutor implements AgentExecutor {
     let payload: unknown;
     let runError: string | undefined;
     try {
-      payload = await this.runAgent(userText, sessionId);
+      payload = await this.runAgent(userText, sessionId, walletAddress);
     } catch (err) {
       runError = err instanceof Error ? err.message : String(err);
       payload = { error: `Agent ${this.agent.id} failed: ${runError}` };
@@ -188,6 +202,16 @@ class SwarmAgentExecutor implements AgentExecutor {
     }
 
     const writes = this.collectAgentWrites(sessionId, sinceTs, beforeKeys);
+    if (this.onAgentExecuted) {
+      const hookParams: AgentExecutionHookParams = {
+        agentId: this.agent.id,
+        sessionId,
+        payload,
+      };
+      if (walletAddress) hookParams.walletAddress = walletAddress;
+      if (runError) hookParams.runError = runError;
+      await this.onAgentExecuted(hookParams);
+    }
 
     const response: Message = {
       kind: "message",
@@ -240,22 +264,46 @@ class SwarmAgentExecutor implements AgentExecutor {
 
   cancelTask = async (): Promise<void> => {};
 
-  private async runAgent(goal: string, sessionId: string): Promise<unknown> {
+  private async runAgent(
+    goal: string,
+    sessionId: string,
+    walletAddress?: string,
+  ): Promise<unknown> {
     switch (this.agent.id) {
       case "researcher":
-        return this.orchestrator.runResearcher(sessionId, goal);
+        return this.orchestrator.runResearcher(
+          sessionId,
+          goal,
+          undefined,
+          walletAddress,
+        );
       case "planner":
         return this.orchestrator.runPlanner(sessionId, goal);
       case "risk":
         return this.orchestrator.runRisk(sessionId);
       case "strategy":
-        return this.orchestrator.runStrategy(sessionId);
+        return this.orchestrator.runStrategy(
+          sessionId,
+          undefined,
+          walletAddress,
+        );
       case "critic":
         return this.orchestrator.runCritic(sessionId);
       case "executor":
         return this.orchestrator.runExecutor(sessionId);
     }
   }
+}
+
+function extractWalletAddress(text: string): string | undefined {
+  // Only accept addresses explicitly tagged as wallet identity, never any
+  // arbitrary token/pool address that might appear in agent task text.
+  const labeledMatch =
+    text.match(/wallet(?:\s+address)?\s*[:=]\s*(0x[a-fA-F0-9]{40})/i) ??
+    text.match(/"walletAddress"\s*:\s*"(0x[a-fA-F0-9]{40})"/i);
+  const normalized = labeledMatch?.[1]?.toLowerCase();
+  if (!normalized || normalized === ZERO_ADDRESS) return undefined;
+  return normalized;
 }
 
 function serialiseAgentPayload(
@@ -336,6 +384,7 @@ export function registerSwarmA2AAgentRoutes(
   app: express.Application,
   orchestrator: SwarmOrchestrator,
   baseUrl: string,
+  onAgentExecuted?: (params: AgentExecutionHookParams) => Promise<void> | void,
 ): StartedAgentServer[] {
   const started: StartedAgentServer[] = [];
 
@@ -350,7 +399,7 @@ export function registerSwarmA2AAgentRoutes(
     const requestHandler = new DefaultRequestHandler(
       card,
       new InMemoryTaskStore(),
-      new SwarmAgentExecutor(orchestrator, updatedDescriptor),
+      new SwarmAgentExecutor(orchestrator, updatedDescriptor, onAgentExecuted),
     );
 
     // Serve the agent card at both the new (>=0.3.x) and legacy (<=0.2.x)

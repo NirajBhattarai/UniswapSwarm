@@ -169,6 +169,12 @@ HOW TO WRITE THE \`task\` ARGUMENT (USER-VISIBLE — DO NOT IGNORE):
   When you receive an agent response, ACKNOWLEDGE briefly in your own
   natural-language assistant message, then issue the next \`task\` as a
   fresh directive — never echo or forward the JSON.
+
+NOTE ON WALLET:
+  Do NOT manually append any wallet address to the \`task\` string.
+  The wallet address is automatically injected by the middleware layer
+  using the verified Reown-connected address. Any address you add will
+  be stripped and replaced, so including one only risks sending a wrong value.
 `;
 
 async function handleCopilotRequest(request: NextRequest) {
@@ -183,11 +189,24 @@ async function handleCopilotRequest(request: NextRequest) {
     );
   }
 
+  // Extract the verified Reown wallet address forwarded by the frontend as a
+  // custom request header. CopilotKit's `headers` prop (set in page.tsx) adds
+  // it to every runtime POST. Validate it is a real-looking Ethereum address
+  // before trusting it; fall back to undefined so the agent marks it anonymous.
+  const rawWallet = request.headers.get("x-wallet-address")?.trim() ?? "";
+  const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
+  const walletAddress =
+    /^0x[a-fA-F0-9]{40}$/.test(rawWallet) &&
+    rawWallet.toLowerCase() !== ZERO_ADDRESS
+      ? rawWallet.toLowerCase()
+      : undefined;
+
   const orchestrationAgent = new SwarmOrchestrationAgent({
     description:
       "Uniswap Swarm orchestrator: routes user requests across 6 specialized A2A trading agents.",
     apiKey,
     model: process.env.COPILOTKIT_MODEL ?? "gemini-2.5-flash",
+    walletAddress,
   });
 
   const agentUrls = getSwarmAgentUrls();

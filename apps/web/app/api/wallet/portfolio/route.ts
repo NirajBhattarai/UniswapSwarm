@@ -141,6 +141,43 @@ async function fetchAlchemyBalances(address: string): Promise<BalanceItem[]> {
   return balances;
 }
 
+async function fetchNativeEthBalance(address: string): Promise<BalanceItem[]> {
+  // Try primary configured RPC first, then a public fallback.
+  const rpcCandidates = [ETH_RPC_URL, "https://eth.llamarpc.com"];
+  let lastError: unknown = null;
+
+  for (const rpcUrl of rpcCandidates) {
+    try {
+      const provider = new ethers.JsonRpcProvider(rpcUrl);
+      const ethBal = await provider.getBalance(address);
+      return [
+        {
+          symbol: "ETH",
+          address: "native",
+          decimals: 18,
+          balance: ethers.formatUnits(ethBal, 18),
+          rawBalance: ethBal.toString(),
+        },
+      ];
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  // Graceful degradation: portfolio endpoint should remain usable even if
+  // upstream RPCs are transiently rate-limited or unavailable.
+  void lastError;
+  return [
+    {
+      symbol: "ETH",
+      address: "native",
+      decimals: 18,
+      balance: "0",
+      rawBalance: "0",
+    },
+  ];
+}
+
 export async function GET(req: NextRequest) {
   try {
     const address = req.nextUrl.searchParams.get("address") ?? "";
@@ -155,18 +192,8 @@ export async function GET(req: NextRequest) {
     try {
       balances = await fetchAlchemyBalances(address);
     } catch {
-      // Fallback: at least return native ETH from generic RPC if Alchemy is missing/down.
-      const provider = new ethers.JsonRpcProvider(ETH_RPC_URL);
-      const ethBal = await provider.getBalance(address);
-      balances = [
-        {
-          symbol: "ETH",
-          address: "native",
-          decimals: 18,
-          balance: ethers.formatUnits(ethBal, 18),
-          rawBalance: ethBal.toString(),
-        },
-      ];
+      // Fallback: return native ETH from one of the public RPCs (or zero on repeated failures).
+      balances = await fetchNativeEthBalance(address);
     }
 
     const nonZero = balances

@@ -33,9 +33,14 @@ import {
 } from "ai";
 import { createGoogleGenerativeAI } from "@ai-sdk/google";
 
+const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
+const A2A_TOOL_NAME = "send_message_to_a2a_agent";
+
 interface SwarmOrchestrationAgentConfig extends AgentConfig {
   apiKey: string;
   model?: string;
+  /** Verified wallet address injected server-side from the x-wallet-address request header. */
+  walletAddress?: string;
 }
 
 /**
@@ -53,11 +58,13 @@ export function resolveGeminiKey(): string | undefined {
 export class SwarmOrchestrationAgent extends AbstractAgent {
   private readonly apiKey: string;
   private readonly model: string;
+  private readonly walletAddress?: string;
 
   constructor(config: SwarmOrchestrationAgentConfig) {
     super(config);
     this.apiKey = config.apiKey;
     this.model = config.model ?? "gemini-2.5-flash";
+    this.walletAddress = config.walletAddress;
   }
 
   run(input: RunAgentInput): Observable<BaseEvent> {
@@ -76,6 +83,12 @@ export class SwarmOrchestrationAgent extends AbstractAgent {
           const model = google(this.model);
 
           const aiMessages = aguiMessagesToAiMessages(input.messages);
+          // Prefer the wallet injected via request header (set in page.tsx
+          // CopilotKit headers → extracted in route.ts). Fall back to message
+          // scanning only if the header was not provided.
+          const connectedWallet =
+            this.walletAddress ||
+            extractConnectedWalletFromMessages(aiMessages);
           const aiTools = aguiToolsToAiTools(input.tools);
 
           const result = streamText({
@@ -128,7 +141,12 @@ export class SwarmOrchestrationAgent extends AbstractAgent {
 
               const toolCallId = part.toolCallId;
               const toolName = part.toolName;
-              const argsString = JSON.stringify(part.args ?? {});
+              const enrichedArgs = enrichA2AToolArgs(
+                toolName,
+                part.args ?? {},
+                connectedWallet,
+              );
+              const argsString = JSON.stringify(enrichedArgs);
 
               subscriber.next({
                 type: EventType.TOOL_CALL_START,
@@ -228,13 +246,81 @@ export class SwarmOrchestrationAgent extends AbstractAgent {
   }
 }
 
+/**
+ * Flatten any CoreMessage content (string or array of content parts) to a
+ * single plain-text string so wallet-address regexes can run on it.
+ */
+function contentToString(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content
+      .map((part) => {
+        if (typeof part === "string") return part;
+        if (typeof part === "object" && part !== null) {
+          const p = part as Record<string, unknown>;
+          if (typeof p.text === "string") return p.text;
+          if (typeof p.content === "string") return p.content;
+        }
+        return "";
+      })
+      .join(" ")
+      .trim();
+  }
+  return "";
+}
+
+function extractConnectedWalletFromMessages(
+  messages: CoreMessage[],
+): string | undefined {
+  for (const message of messages) {
+    const text = contentToString(message.content);
+    if (!text) continue;
+    const labeledMatch =
+      text.match(/connected wallet\s*:\s*(0x[a-fA-F0-9]{40})/i) ??
+      text.match(/wallet(?:\s+address)?\s*[:=]\s*(0x[a-fA-F0-9]{40})/i) ??
+      text.match(/"walletAddress"\s*:\s*"(0x[a-fA-F0-9]{40})"/i);
+    const wallet = labeledMatch?.[1]?.toLowerCase();
+    if (wallet && wallet !== ZERO_ADDRESS) return wallet;
+  }
+  return undefined;
+}
+
+function enrichA2AToolArgs(
+  toolName: string,
+  rawArgs: unknown,
+  connectedWallet?: string,
+): unknown {
+  if (toolName !== A2A_TOOL_NAME) return rawArgs;
+  if (!rawArgs || typeof rawArgs !== "object" || Array.isArray(rawArgs)) {
+    return rawArgs;
+  }
+
+  const args = rawArgs as Record<string, unknown>;
+  const task = typeof args.task === "string" ? args.task : "";
+  if (!task) return rawArgs;
+
+  const sanitizedTask = task
+    .replace(/\n?Wallet:\s*0x[a-fA-F0-9]{40}\b/gi, "")
+    .replace(/\n?wallet(?:\s+address)?\s*[:=]\s*0x[a-fA-F0-9]{40}\b/gi, "")
+    .trim();
+  if (!connectedWallet) {
+    return { ...args, task: sanitizedTask };
+  }
+  return {
+    ...args,
+    task: `${sanitizedTask}\nWallet: ${connectedWallet}`,
+  };
+}
+
 // ── helpers ──────────────────────────────────────────────────────────────────
 
 function aguiMessagesToAiMessages(messages: Message[]): CoreMessage[] {
   const out: CoreMessage[] = [];
   for (const m of messages) {
     if (m.role === "system" || m.role === "developer") {
-      out.push({ role: "system", content: m.content ?? "" });
+      // Always coerce to string so wallet-address extraction works regardless
+      // of whether CopilotKit sends content as a string or an array of parts.
+      out.push({ role: "system", content: contentToString(m.content ?? "") });
       continue;
     }
     if (m.role === "user") {

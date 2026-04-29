@@ -1,24 +1,16 @@
 "use client";
 
-import { CopilotKit } from "@copilotkit/react-core";
 import { ensureAppKitInit } from "../lib/reown";
 
 type ProvidersProps = {
   children: React.ReactNode;
 };
 
+// Initialises Reown AppKit (wallet connection) for the whole app.
+// CopilotKit is mounted in page.tsx so it can receive the connected wallet
+// address directly as a request header, which the API route forwards to the
+// orchestration agent for reliable DynamoDB history attribution.
 export function Providers({ children }: ProvidersProps) {
   ensureAppKitInit();
-  const runtimeUrl =
-    process.env.NEXT_PUBLIC_COPILOTKIT_RUNTIME_URL ?? "/api/copilotkit";
-
-  return (
-    <CopilotKit
-      runtimeUrl={runtimeUrl}
-      agent="swarm_chat"
-      showDevConsole={false}
-    >
-      {children}
-    </CopilotKit>
-  );
+  return <>{children}</>;
 }

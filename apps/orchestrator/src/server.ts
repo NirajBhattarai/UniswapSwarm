@@ -2,7 +2,7 @@ import express, { type Request, type Response } from "express";
 import { randomUUID } from "node:crypto";
 import { SwarmOrchestrator } from "./orchestrator";
 import { getConfig, logger } from "@swarm/shared";
-import type { SwarmEvent } from "@swarm/shared";
+import type { SwarmCycleState, SwarmEvent } from "@swarm/shared";
 import {
   registerA2ARoutes,
   selectAgentForIntent,
@@ -10,7 +10,13 @@ import {
   type SwarmFlowStep,
   type SwarmTransfer,
 } from "./a2aOrchestrator";
-import { registerSwarmA2AAgentRoutes } from "./a2aAgents";
+import {
+  registerSwarmA2AAgentRoutes,
+  type AgentExecutionHookParams,
+} from "./a2aAgents";
+
+const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
+import { DynamoHistoryStore } from "./historyStore";
 
 // ── SSE helpers ────────────────────────────────────────────────────────────────
 
@@ -91,6 +97,103 @@ function resolveSessionId(req: Request, autoCreate = true): string {
   return generated;
 }
 
+function resolveHistoryOwnerKey(req: Request): string {
+  const bodyWallet =
+    typeof (req.body as { walletAddress?: unknown } | undefined)
+      ?.walletAddress === "string"
+      ? ((req.body as { walletAddress?: string }).walletAddress ?? "").trim()
+      : "";
+  const headerWallet = (req.header("x-wallet-address") ?? "").trim();
+  const queryWallet =
+    typeof req.query.walletAddress === "string"
+      ? req.query.walletAddress.trim()
+      : "";
+
+  // Backwards-compatible fallback to userId-based lookup.
+  const bodyUserId =
+    typeof (req.body as { userId?: unknown } | undefined)?.userId === "string"
+      ? ((req.body as { userId?: string }).userId ?? "").trim()
+      : "";
+  const headerUserId = (req.header("x-user-id") ?? "").trim();
+  const queryUserId =
+    typeof req.query.userId === "string" ? req.query.userId.trim() : "";
+
+  const resolved =
+    bodyWallet ||
+    headerWallet ||
+    queryWallet ||
+    bodyUserId ||
+    headerUserId ||
+    queryUserId ||
+    "anonymous";
+  const normalized = resolved.toLowerCase();
+  return normalized === ZERO_ADDRESS ? "anonymous" : normalized;
+}
+
+function resolveSessionParam(req: Request, key: "sessionId"): string | null {
+  const raw = req.params[key];
+  if (typeof raw === "string") return raw;
+  if (Array.isArray(raw)) return raw[0] ?? null;
+  return null;
+}
+
+function toObject(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  return value as Record<string, unknown>;
+}
+
+function buildCycleStateFromMemory(
+  orchestrator: SwarmOrchestrator,
+  sessionId: string,
+  cycleId: string,
+  startedAt: number,
+): SwarmCycleState {
+  const state: SwarmCycleState = {
+    cycleId,
+    startedAt,
+    completedAt: Date.now(),
+  };
+  const memory = orchestrator.getMemory(sessionId);
+  for (const entry of memory) {
+    if (entry.key === "researcher/report") {
+      if (entry.value !== undefined) {
+        state.research = entry.value as NonNullable<
+          SwarmCycleState["research"]
+        >;
+      }
+    } else if (entry.key === "planner/plan") {
+      if (entry.value !== undefined) {
+        state.plan = entry.value as NonNullable<SwarmCycleState["plan"]>;
+      }
+    } else if (entry.key === "risk/assessments") {
+      if (entry.value !== undefined) {
+        state.riskAssessments = entry.value as NonNullable<
+          SwarmCycleState["riskAssessments"]
+        >;
+      }
+    } else if (entry.key === "strategy/proposal") {
+      if (entry.value !== undefined) {
+        state.strategy = entry.value as NonNullable<
+          SwarmCycleState["strategy"]
+        >;
+      }
+    } else if (entry.key === "critic/critique") {
+      if (entry.value !== undefined) {
+        state.critique = entry.value as NonNullable<
+          SwarmCycleState["critique"]
+        >;
+      }
+    } else if (entry.key === "executor/execution") {
+      if (entry.value !== undefined) {
+        state.execution = entry.value as NonNullable<
+          SwarmCycleState["execution"]
+        >;
+      }
+    }
+  }
+  return state;
+}
+
 // ── Factory ───────────────────────────────────────────────────────────────────
 
 export function createServer(
@@ -98,6 +201,29 @@ export function createServer(
 ): express.Application {
   const app = express();
   const cfg = getConfig();
+  const dynamoRegion = cfg.DYNAMODB_REGION.trim();
+  const dynamoTable = cfg.DYNAMODB_HISTORY_TABLE.trim();
+  const dynamoGsiUser = cfg.DYNAMODB_HISTORY_GSI_USER.trim() || "GSI1";
+  const awsAccessKeyId = cfg.AWS_ACCESS_KEY_ID.trim();
+  const awsSecretAccessKey = cfg.AWS_SECRET_ACCESS_KEY.trim();
+  const awsSessionToken = cfg.AWS_SESSION_TOKEN.trim();
+  const credentials =
+    awsAccessKeyId && awsSecretAccessKey
+      ? {
+          accessKeyId: awsAccessKeyId,
+          secretAccessKey: awsSecretAccessKey,
+          ...(awsSessionToken ? { sessionToken: awsSessionToken } : {}),
+        }
+      : undefined;
+  const historyStore =
+    dynamoRegion && dynamoTable
+      ? new DynamoHistoryStore(
+          dynamoRegion,
+          dynamoTable,
+          dynamoGsiUser,
+          credentials,
+        )
+      : null;
   const publicBaseUrl =
     process.env.A2A_PUBLIC_BASE_URL ?? `http://localhost:${cfg.PORT}`;
   app.use(express.json());
@@ -124,6 +250,60 @@ export function createServer(
     app,
     orchestrator,
     publicBaseUrl,
+    async (params: AgentExecutionHookParams): Promise<void> => {
+      if (!historyStore) return;
+      const shouldPersist =
+        params.agentId === "executor" ||
+        params.agentId === "critic" ||
+        params.runError != null;
+      if (!shouldPersist) return;
+
+      const now = Date.now();
+      const state = buildCycleStateFromMemory(
+        orchestrator,
+        params.sessionId,
+        `a2a-agent-${params.sessionId}-${now}`,
+        now,
+      );
+
+      if (params.agentId === "critic") {
+        const critiqueObj = toObject(params.payload);
+        const approved = critiqueObj?.approved;
+        if (approved === false) {
+          state.execution = {
+            dryRun: cfg.DRY_RUN,
+            txHash: null,
+            success: false,
+            amountIn: "0",
+            amountOut: null,
+            gasUsed: null,
+            priceImpactPct: null,
+            executedAt: Date.now(),
+            error: "Rejected by critic; execution skipped",
+          };
+        }
+      }
+
+      if (params.runError) {
+        state.execution = {
+          dryRun: cfg.DRY_RUN,
+          txHash: null,
+          success: false,
+          amountIn: "0",
+          amountOut: null,
+          gasUsed: null,
+          priceImpactPct: null,
+          executedAt: Date.now(),
+          error: `A2A ${params.agentId} error: ${params.runError}`,
+        };
+      }
+
+      await historyStore.recordCycle(
+        params.walletAddress ?? "anonymous",
+        params.sessionId,
+        state,
+      );
+    },
   );
 
   // Store agent routes for logging
@@ -137,6 +317,7 @@ export function createServer(
     "/a2a/route/stream",
     async (req: Request, res: Response): Promise<void> => {
       const sessionId = resolveSessionId(req);
+      const ownerKey = resolveHistoryOwnerKey(req);
       const { query, walletAddress } = req.body as {
         query?: string;
         walletAddress?: string;
@@ -148,6 +329,7 @@ export function createServer(
 
       const selectedAgent = selectAgentForIntent(requestText);
       const cycleId = `a2a-stream-${Date.now()}`;
+      const cycleStartedAt = Date.now();
       const ts = () => Date.now();
 
       const flow: SwarmFlowStep[] = [
@@ -471,6 +653,44 @@ export function createServer(
           result,
         };
 
+        if (historyStore) {
+          let stateToPersist: SwarmCycleState | null = null;
+          if (selectedAgent === "trade_pipeline") {
+            const tradeResult = result as {
+              research?: SwarmCycleState["research"];
+              plan?: SwarmCycleState["plan"];
+              riskAssessments?: SwarmCycleState["riskAssessments"];
+              strategy?: SwarmCycleState["strategy"];
+              critique?: SwarmCycleState["critique"];
+              execution?: SwarmCycleState["execution"];
+            };
+            const tradeState: SwarmCycleState = {
+              cycleId,
+              startedAt: cycleStartedAt,
+              completedAt: Date.now(),
+            };
+            if (tradeResult.research)
+              tradeState.research = tradeResult.research;
+            if (tradeResult.plan) tradeState.plan = tradeResult.plan;
+            if (tradeResult.riskAssessments) {
+              tradeState.riskAssessments = tradeResult.riskAssessments;
+            }
+            if (tradeResult.strategy)
+              tradeState.strategy = tradeResult.strategy;
+            if (tradeResult.critique)
+              tradeState.critique = tradeResult.critique;
+            if (tradeResult.execution) {
+              tradeState.execution = tradeResult.execution;
+            }
+            stateToPersist = tradeState;
+          } else if (selectedAgent === "cycle") {
+            stateToPersist = result as SwarmCycleState;
+          }
+          if (stateToPersist) {
+            await historyStore.recordCycle(ownerKey, sessionId, stateToPersist);
+          }
+        }
+
         emit({
           type: "cycle_done",
           cycleId,
@@ -497,54 +717,6 @@ export function createServer(
   app.get("/health", (_req: Request, res: Response): void => {
     res.json({ status: "ok", running: orchestrator.isRunning() });
   });
-
-  // ── Full pipeline — blocking JSON ───────────────────────────────────────────
-  app.post("/cycle", async (_req: Request, res: Response): Promise<void> => {
-    const sessionId = resolveSessionId(_req);
-    const { walletAddress } = (_req.body ?? {}) as { walletAddress?: string };
-    if (orchestrator.isRunning()) {
-      res.status(409).json({ error: "A cycle is already running" });
-      return;
-    }
-    try {
-      orchestrator.setRunning(true);
-      res.setHeader("X-Session-Id", sessionId);
-      const state = await orchestrator.runCycle(sessionId, walletAddress);
-      res.json({ sessionId, ...state });
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      res.status(500).json({ error: msg });
-    } finally {
-      orchestrator.setRunning(false);
-    }
-  });
-
-  // ── Full pipeline — SSE stream ──────────────────────────────────────────────
-  app.post(
-    "/cycle/stream",
-    async (_req: Request, res: Response): Promise<void> => {
-      const sessionId = resolveSessionId(_req);
-      const { walletAddress } = (_req.body ?? {}) as { walletAddress?: string };
-      if (orchestrator.isRunning()) {
-        res.status(409).json({ error: "A cycle is already running" });
-        return;
-      }
-      sseHeaders(res);
-      res.setHeader("X-Session-Id", sessionId);
-      try {
-        orchestrator.setRunning(true);
-        for await (const event of orchestrator.runCycleStream(
-          sessionId,
-          walletAddress,
-        )) {
-          sseSend(res, event);
-        }
-      } finally {
-        orchestrator.setRunning(false);
-        sseDone(res);
-      }
-    },
-  );
 
   // ── Per-agent helpers ───────────────────────────────────────────────────────
   // Each pair: POST /agents/<name>  (JSON) + POST /agents/<name>/stream (SSE)
@@ -883,8 +1055,93 @@ export function createServer(
   app.get("/history", (req: Request, res: Response): void => {
     const sessionId = resolveSessionId(req, false);
     res.setHeader("X-Session-Id", sessionId || "none");
-    res.json(orchestrator.getHistory());
+    if (!historyStore) {
+      res.json(orchestrator.getHistory());
+      return;
+    }
+    if (!sessionId) {
+      res.json([]);
+      return;
+    }
+    void historyStore
+      .listCycles(sessionId, 100)
+      .then((rows) => res.json(rows.map((row) => row.state)))
+      .catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        res.status(500).json({ error: msg });
+      });
   });
+
+  app.get("/history/sessions", (req: Request, res: Response): void => {
+    if (!historyStore) {
+      res.json({ data: [] });
+      return;
+    }
+    const ownerKey = resolveHistoryOwnerKey(req);
+    const limitRaw =
+      typeof req.query.limit === "string" ? Number(req.query.limit) : 20;
+    const limit = Number.isFinite(limitRaw) ? limitRaw : 20;
+    void historyStore
+      .listSessionsByUser(ownerKey, limit)
+      .then((data) => res.json({ data }))
+      .catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        res.status(500).json({ error: msg });
+      });
+  });
+
+  app.get(
+    "/history/sessions/:sessionId",
+    (req: Request, res: Response): void => {
+      if (!historyStore) {
+        res.status(404).json({ error: "History store is not configured" });
+        return;
+      }
+      const sessionId = resolveSessionParam(req, "sessionId");
+      if (!sessionId) {
+        res.status(400).json({ error: "sessionId is required" });
+        return;
+      }
+      void historyStore
+        .getSession(sessionId)
+        .then((data) => {
+          if (!data) {
+            res.status(404).json({ error: "Session not found" });
+            return;
+          }
+          res.json(data);
+        })
+        .catch((err: unknown) => {
+          const msg = err instanceof Error ? err.message : String(err);
+          res.status(500).json({ error: msg });
+        });
+    },
+  );
+
+  app.get(
+    "/history/sessions/:sessionId/cycles",
+    (req: Request, res: Response): void => {
+      if (!historyStore) {
+        res.json({ data: [] });
+        return;
+      }
+      const sessionId = resolveSessionParam(req, "sessionId");
+      if (!sessionId) {
+        res.status(400).json({ error: "sessionId is required" });
+        return;
+      }
+      const limitRaw =
+        typeof req.query.limit === "string" ? Number(req.query.limit) : 50;
+      const limit = Number.isFinite(limitRaw) ? limitRaw : 50;
+      void historyStore
+        .listCycles(sessionId, limit)
+        .then((data) => res.json({ data }))
+        .catch((err: unknown) => {
+          const msg = err instanceof Error ? err.message : String(err);
+          res.status(500).json({ error: msg });
+        });
+    },
+  );
 
   // ── Latest cycle ───────────────────────────────────────────────────────────
   // GET /latest - returns latest cycle for specific session if sessionId provided
@@ -912,10 +1169,7 @@ export async function startServer(
     logger.info(`[API] Uniswap Swarm listening on http://0.0.0.0:${cfg.PORT}`);
     logger.info(`[API] Full pipeline:`);
     logger.info(
-      `[API]   POST /cycle                              → full pipeline (JSON)`,
-    );
-    logger.info(
-      `[API]   POST /cycle/stream                       → full pipeline (SSE)`,
+      `[API]   POST /a2a/route/stream                   → intent-routed pipeline (SSE)`,
     );
     logger.info(`[API] Per-agent (JSON | SSE stream):`);
     logger.info(
@@ -947,12 +1201,14 @@ export async function startServer(
       `[API]   GET  /memory   GET /history   GET /latest   GET /health`,
     );
     logger.info(
+      `[API]   GET  /history/sessions   GET /history/sessions/:sessionId   GET /history/sessions/:sessionId/cycles`,
+    );
+    logger.info(
       `[API]   DRY_RUN=${cfg.DRY_RUN ? "true (no real trades)" : "⚠️  false — LIVE TRADING"}`,
     );
     logger.info(`[API] A2A Orchestrator:`);
     logger.info(`[API]   GET  /.well-known/agent-card.json`);
     logger.info(`[API]   POST /a2a/jsonrpc   POST /a2a/rest`);
-    logger.info(`[API]   POST /a2a/route/stream`);
 
     const agentRoutes = (
       app as express.Application & { __agentRoutes?: unknown }

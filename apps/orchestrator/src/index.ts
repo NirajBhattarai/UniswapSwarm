@@ -18,7 +18,7 @@ async function main(): Promise<void> {
   await orchestrator.init();
 
   // Start HTTP API with all endpoints on the same port:
-  // - Legacy /cycle, /agents/* routes
+  // - /agents/* routes
   // - A2A orchestrator at /a2a/jsonrpc and /a2a/rest
   // - Individual A2A agents at /a2a/agents/* (no longer separate ports)
   await startServer(orchestrator);

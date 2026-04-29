@@ -102,27 +102,33 @@ Copy the example and fill in your keys:
 cp .env.example .env
 ```
 
-| Variable               | Required | Description                                                                      |
-| ---------------------- | -------- | -------------------------------------------------------------------------------- |
-| `ZG_PRIVATE_KEY`       | **yes**  | Private key of a funded 0G wallet (64-char hex, no `0x`)                         |
-| `ZG_CHAIN_RPC`         | no       | 0G EVM RPC (default: `https://evmrpc-testnet.0g.ai`)                             |
-| `ETH_RPC_URL`          | no       | Ethereum mainnet RPC (default: `https://eth.llamarpc.com`)                       |
-| `ZG_COMPUTE_RPC`       | no       | 0G Compute indexer RPC (default: `https://indexer-storage-testnet-turbo.0g.ai`)  |
-| `ZG_STORAGE_RPC`       | no       | 0G Storage RPC (default: `https://evmrpc-testnet.0g.ai`)                         |
-| `ZG_INDEXER_RPC`       | no       | 0G Storage indexer RPC (default: `https://indexer-storage-testnet-turbo.0g.ai`)  |
-| `ZG_FLOW_CONTRACT`     | no       | 0G Flow contract address (default: `0xbD2C3F0E65eDF5582141C35969d66e205E00C9c8`) |
-| `UNISWAP_API_KEY`      | no       | Uniswap Trading API key (https://developers.uniswap.org/dashboard)               |
-| `COINGECKO_API_KEY`    | no       | CoinGecko API key — free demo key or pro key (https://www.coingecko.com/en/api)  |
-| `ALCHEMY_API_KEY`      | no       | Enables full ERC-20 wallet holdings discovery (fallback is known-token Multicall) |
-| `MAX_SLIPPAGE_PCT`     | no       | Maximum swap slippage % (default: `1.5`)                                         |
-| `MAX_POSITION_USDC`    | no       | Maximum position size in USDC (default: `50`)                                    |
-| `MIN_LIQUIDITY_USD`    | no       | Minimum pool liquidity required (default: `100000`)                              |
-| `MAX_GAS_GWEI`         | no       | Gas price ceiling in Gwei (default: `30`)                                        |
-| `RISK_SCORE_THRESHOLD` | no       | Minimum risk score to proceed (0–100, default: `70`)                             |
-| `DRY_RUN`              | no       | `true` to simulate swaps without submitting on-chain (default: `true`)           |
-| `SIMULATION_ONLY`      | no       | Extra execution guard. If `true`, forces simulation even when `DRY_RUN=false`     |
-| `CYCLE_INTERVAL_MS`    | no       | Milliseconds between autonomous cycles (default: `300000` = 5 min)               |
-| `PORT`                 | no       | REST server port (default: `4000`)                                               |
+| Variable                    | Required | Description                                                                           |
+| --------------------------- | -------- | ------------------------------------------------------------------------------------- |
+| `ZG_PRIVATE_KEY`            | **yes**  | Private key of a funded 0G wallet (64-char hex, no `0x`)                              |
+| `ZG_CHAIN_RPC`              | no       | 0G EVM RPC (default: `https://evmrpc-testnet.0g.ai`)                                  |
+| `ETH_RPC_URL`               | no       | Ethereum mainnet RPC (default: `https://eth.llamarpc.com`)                            |
+| `ZG_COMPUTE_RPC`            | no       | 0G Compute indexer RPC (default: `https://indexer-storage-testnet-turbo.0g.ai`)       |
+| `ZG_STORAGE_RPC`            | no       | 0G Storage RPC (default: `https://evmrpc-testnet.0g.ai`)                              |
+| `ZG_INDEXER_RPC`            | no       | 0G Storage indexer RPC (default: `https://indexer-storage-testnet-turbo.0g.ai`)       |
+| `ZG_FLOW_CONTRACT`          | no       | 0G Flow contract address (default: `0xbD2C3F0E65eDF5582141C35969d66e205E00C9c8`)      |
+| `UNISWAP_API_KEY`           | no       | Uniswap Trading API key (https://developers.uniswap.org/dashboard)                    |
+| `COINGECKO_API_KEY`         | no       | CoinGecko API key — free demo key or pro key (https://www.coingecko.com/en/api)       |
+| `ALCHEMY_API_KEY`           | no       | Enables full ERC-20 wallet holdings discovery (fallback is known-token Multicall)     |
+| `MAX_SLIPPAGE_PCT`          | no       | Maximum swap slippage % (default: `1.5`)                                              |
+| `MAX_POSITION_USDC`         | no       | Maximum position size in USDC (default: `50`)                                         |
+| `MIN_LIQUIDITY_USD`         | no       | Minimum pool liquidity required (default: `100000`)                                   |
+| `MAX_GAS_GWEI`              | no       | Gas price ceiling in Gwei (default: `30`)                                             |
+| `RISK_SCORE_THRESHOLD`      | no       | Minimum risk score to proceed (0–100, default: `70`)                                  |
+| `DRY_RUN`                   | no       | `true` to simulate swaps without submitting on-chain (default: `true`)                |
+| `SIMULATION_ONLY`           | no       | Extra execution guard. If `true`, forces simulation even when `DRY_RUN=false`         |
+| `CYCLE_INTERVAL_MS`         | no       | Milliseconds between autonomous cycles (default: `300000` = 5 min)                    |
+| `PORT`                      | no       | REST server port (default: `4000`)                                                    |
+| `DYNAMODB_REGION`           | no       | AWS region for optional history persistence (e.g. `us-east-1`)                        |
+| `DYNAMODB_HISTORY_TABLE`    | no       | DynamoDB table name for persisted session/cycle history                               |
+| `DYNAMODB_HISTORY_GSI_USER` | no       | User-index GSI name for history queries (default: `GSI1`)                             |
+| `AWS_ACCESS_KEY_ID`         | no       | AWS access key ID used by Dynamo history client (optional; IAM role/chain also works) |
+| `AWS_SECRET_ACCESS_KEY`     | no       | AWS secret access key paired with `AWS_ACCESS_KEY_ID`                                 |
+| `AWS_SESSION_TOKEN`         | no       | AWS session token for temporary credentials (optional)                                |
 
 #### CopilotKit cockpit / A2A integration
 
@@ -165,11 +171,10 @@ The server starts on port `4000` by default (override with `PORT` env var).
 
 #### Full-pipeline endpoints
 
-| Method | Path            | Description                                       |
-| ------ | --------------- | ------------------------------------------------- |
-| `GET`  | `/health`       | Liveness check (`{ status, running }`)            |
-| `POST` | `/cycle`        | Run one full agent cycle (blocking JSON response) |
-| `POST` | `/cycle/stream` | Run one full agent cycle with SSE event streaming |
+| Method | Path                | Description                                               |
+| ------ | ------------------- | --------------------------------------------------------- |
+| `GET`  | `/health`           | Liveness check (`{ status, running }`)                    |
+| `POST` | `/a2a/route/stream` | Run intent-routed agent pipeline with SSE event streaming |
 
 #### Per-agent endpoints
 

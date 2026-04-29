@@ -2,9 +2,11 @@
 
 import { useState } from "react";
 import { useAppKitAccount } from "@reown/appkit/react";
+import { CopilotKit } from "@copilotkit/react-core";
 import { SwarmAgentOutputs } from "../components/SwarmAgentOutputs";
 import { SwarmChat } from "../components/swarm-chat";
 import { WalletConnectButton } from "../components/wallet/WalletConnectButton";
+import { SwarmHistoryPanel } from "../components/history/SwarmHistoryPanel";
 import { SWARM_AGENTS } from "../lib/swarm-agents";
 import type { SwarmAggregateState } from "../components/types";
 
@@ -71,7 +73,17 @@ export default function Home() {
           */}
           <div className="flex min-h-0 flex-1 flex-col overflow-hidden p-3">
             {isConnected ? (
-              <SwarmChat state={state} onState={setState} />
+              <CopilotKit
+                runtimeUrl={
+                  process.env.NEXT_PUBLIC_COPILOTKIT_RUNTIME_URL ??
+                  "/api/copilotkit"
+                }
+                agent="swarm_chat"
+                showDevConsole={false}
+                headers={{ "x-wallet-address": address ?? "" }}
+              >
+                <SwarmChat state={state} onState={setState} />
+              </CopilotKit>
             ) : (
               <div className="flex h-full items-center justify-center rounded-xl border border-dashed border-slate-300 bg-white/60 p-6 text-center">
                 <div>
@@ -113,7 +125,10 @@ export default function Home() {
           </header>
 
           <div className="min-h-0 flex-1 overflow-hidden p-4">
-            <SwarmAgentOutputs state={state} />
+            <div className="grid h-full min-h-0 grid-rows-[minmax(0,2fr)_minmax(0,1fr)] gap-3">
+              <SwarmAgentOutputs state={state} />
+              <SwarmHistoryPanel walletAddress={address} />
+            </div>
           </div>
         </section>
       </div>

@@ -16,6 +16,7 @@ import { BrowserProvider } from "ethers";
 import {
   useCopilotAction,
   useCopilotChatInternal,
+  useCopilotReadable,
 } from "@copilotkit/react-core";
 import {
   useAppKit,
@@ -202,6 +203,16 @@ export const SwarmChat: React.FC<SwarmChatProps> = ({ state, onState }) => {
   const { open } = useAppKit();
   const { address, isConnected } = useAppKitAccount();
   const { walletProvider } = useAppKitProvider("eip155");
+
+  // Inject wallet address as structured readable context so the orchestration
+  // agent can reliably extract it regardless of system-message content format.
+  useCopilotReadable({
+    description: "Connected wallet address from Reown AppKit",
+    value:
+      isConnected && address
+        ? `Connected wallet: ${address}`
+        : "No wallet connected",
+  });
 
   useEffect(() => {
     if (!isConnected || !address) {
