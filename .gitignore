@@ -43,3 +43,11 @@ yarn-error.log*
 
 # Local scratch / reference clones
 tmp/
+
+# Runtime agent memory — contains live session state, never commit
+**/.swarm/persisted-memory.json
+**/.swarm/*.json
+
+# Env / secrets — belt-and-suspenders (also in .env.*)
+*.env.local
+*.env.*.local

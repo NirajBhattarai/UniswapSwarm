@@ -783,6 +783,8 @@ const ExecutionCard: React.FC<{
       }
 
       const amountInWei = ethers.parseUnits(amount, chosen.decimals).toString();
+
+      // ── Step 1: prepare (check_approval + quote) ──────────────────────────
       const prepareRes = await fetch("/api/swap/prepare", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -794,36 +796,95 @@ const ExecutionCard: React.FC<{
           slippagePct: slippageValue,
         }),
       });
-      const payload = (await prepareRes.json()) as {
-        approvalTx?: { to: string; data: string; value?: string } | null;
-        swapTx?: { to: string; data: string; value?: string };
+      const preparePayload = (await prepareRes.json()) as {
+        approvalTx: { to: string; data: string; value?: string } | null;
+        /** Full /quote API response — execute route spreads this into the /swap body */
+        quoteResponse: Record<string, unknown>;
         error?: string;
       };
-      if (!prepareRes.ok || !payload.swapTx) {
-        throw new Error(payload.error ?? "Swap preparation failed");
+      if (!prepareRes.ok || !("quoteResponse" in preparePayload)) {
+        throw new Error(preparePayload.error ?? "Swap preparation failed");
       }
 
       const provider = new BrowserProvider(walletProvider as any);
       const signer = await provider.getSigner();
 
-      if (payload.approvalTx) {
+      // ── Step 2: ERC20 → Permit2 approval (if needed) ──────────────────────
+      if (preparePayload.approvalTx) {
         const approvalTx = await signer.sendTransaction({
-          to: payload.approvalTx.to,
-          data: payload.approvalTx.data,
-          value: payload.approvalTx.value
-            ? BigInt(payload.approvalTx.value)
+          to: preparePayload.approvalTx.to,
+          data: preparePayload.approvalTx.data,
+          value: preparePayload.approvalTx.value
+            ? BigInt(preparePayload.approvalTx.value)
             : BigInt(0),
         });
         await approvalTx.wait();
       }
 
-      const swapTx = await signer.sendTransaction({
-        to: payload.swapTx.to,
-        data: payload.swapTx.data,
-        value: payload.swapTx.value ? BigInt(payload.swapTx.value) : BigInt(0),
+      // ── Step 3: sign Permit2 EIP-712 data (off-chain, no gas) ─────────────
+      // Universal Router v2 uses Permit2 for token transfers. The /quote
+      // response contains EIP-712 typed data the wallet must sign. The
+      // signature is embedded in the swap calldata via PERMIT2_PERMIT command
+      // (classic routing) or used as the UniswapX order witness (Dutch routing).
+      let permitSignature: string | null = null;
+      const permitData = preparePayload.quoteResponse["permitData"];
+      if (permitData && typeof permitData === "object") {
+        const pd = permitData as {
+          domain: Parameters<typeof signer.signTypedData>[0];
+          types: Parameters<typeof signer.signTypedData>[1];
+          values: Parameters<typeof signer.signTypedData>[2];
+        };
+        permitSignature = await signer.signTypedData(
+          pd.domain,
+          pd.types,
+          pd.values,
+        );
+      }
+
+      // ── Step 4: get swap calldata from Trading API ────────────────────────
+      const executeRes = await fetch("/api/swap/execute", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          quoteResponse: preparePayload.quoteResponse,
+          signature: permitSignature,
+        }),
       });
-      await swapTx.wait();
-      setTxHash(swapTx.hash);
+      const executePayload = (await executeRes.json()) as {
+        swapTx?: { to: string; data: string; value?: string };
+        orderHash?: string;
+        type?: string;
+        error?: string;
+      };
+      if (!executeRes.ok) {
+        throw new Error(
+          executePayload.error ?? `Swap execute failed (${executeRes.status})`,
+        );
+      }
+
+      // ── Step 5a: Classic swap — broadcast the swap tx ──────────────────────
+      if (executePayload.swapTx) {
+        const swapTx = await signer.sendTransaction({
+          to: executePayload.swapTx.to,
+          data: executePayload.swapTx.data,
+          value: executePayload.swapTx.value
+            ? BigInt(executePayload.swapTx.value)
+            : BigInt(0),
+        });
+        await swapTx.wait();
+        setTxHash(swapTx.hash);
+        return;
+      }
+
+      // ── Step 5b: UniswapX — order submitted to fillers by the API ─────────
+      // For Dutch orders, the Uniswap Trading API submits the signed order to
+      // UniswapX fillers. No user tx is needed; fillers execute on-chain.
+      if (executePayload.orderHash) {
+        setTxHash(executePayload.orderHash);
+        return;
+      }
+
+      throw new Error("Swap failed: no transaction or order hash returned");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Swap failed");
     } finally {

@@ -137,36 +137,29 @@ export async function POST(req: NextRequest) {
         tokenOut,
         amount: amountInWei,
         type: "EXACT_INPUT",
-        tokenInChainId: 1,
-        tokenOutChainId: 1,
+        // tokenInChainId / tokenOutChainId MUST be strings per the Trading API spec.
+        tokenInChainId: "1",
+        tokenOutChainId: "1",
         swapper: wallet,
         slippageTolerance: slippagePct,
-        generatePermitAsTransaction: true,
       },
       apiKey,
     );
 
-    const quote = quoteResponse["quote"];
-    if (typeof quote !== "object" || quote === null) {
+    if (typeof quoteResponse["routing"] !== "string") {
       return NextResponse.json(
-        { error: "Trade API quote payload missing" },
+        { error: "Trade API /quote response missing routing field" },
         { status: 502 },
       );
     }
 
-    const swapResponse = await callTradeApi("swap", { quote }, apiKey);
-    const swapTx = extractTxRequest(swapResponse);
-    if (!swapTx) {
-      return NextResponse.json(
-        { error: "Swap transaction payload missing from Trade API response" },
-        { status: 502 },
-      );
-    }
-
+    // Return the FULL quoteResponse — the execute route must spread it into the
+    // /swap body per the Uniswap Trading API spec:
+    //   POST /swap body = { ...fullQuoteResponse, signature? }
+    // The frontend reads quoteResponse.permitData for EIP-712 signing (off-chain).
     return NextResponse.json({
       approvalTx,
-      swapTx,
-      quote,
+      quoteResponse,
       requested: {
         tokenIn: normalizedTokenIn,
         tokenOut,
