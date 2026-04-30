@@ -75,11 +75,10 @@ export function buildResearchPrompt(args: BuildResearchPromptArgs): string {
     walletHoldings,
   } = args;
 
-  // Keep the prompt compact for small-context models by sending only the most
-  // decision-relevant fields and capping total rows.
-  // Sort by liquidityUSD descending so the LLM always sees the deepest pools first.
-  const compactPools = pools
-    .slice(0, 20)
+  // Send all qualifying pools sorted by liquidityUSD descending so the LLM can
+  // evaluate the full opportunity set. No arbitrary row cap — deeper context
+  // allows the model to surface more unique non-stablecoin candidates.
+  const compactPools = [...pools]
     .sort((a, b) => b.liquidityUSD - a.liquidityUSD)
     .map((p) => ({
       tokenAddress: p.tokenAddress,
@@ -106,7 +105,7 @@ export function buildResearchPrompt(args: BuildResearchPromptArgs): string {
   return [
     `Trading goal: ${goal}`,
     `Default constraints: maxSlippage=${cfg.MAX_SLIPPAGE_PCT}%, maxPosition=$${cfg.MAX_POSITION_USDC} USDC, minLiquidity=$${cfg.MIN_LIQUIDITY_USD.toLocaleString()}`,
-    `Live Uniswap multi-protocol pool data (compact top ${compactPools.length}) - each entry has a pre-computed \`tokenAddress\` - use it directly as the candidate \`address\` field:\n${JSON.stringify(compactPools)}`,
+    `Live Uniswap multi-protocol pool data (${compactPools.length} pools, sorted by liquidityUSD desc) - each entry has a pre-computed \`tokenAddress\` - use it directly as the candidate \`address\` field:\n${JSON.stringify(compactPools)}`,
     marketDataText,
     `\nReal-time narrative signal:\n${narrativeText}`,
     walletSection,

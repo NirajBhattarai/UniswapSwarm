@@ -171,7 +171,10 @@ export const SwarmPipelineStageBody: React.FC<{
     case SWARM_PIPELINE_NODE_IDS.researcher:
       return (
         <>
-          <ResearchCard data={research} />
+          <ResearchCard
+            data={research}
+            hasRequested={Boolean(request?.trim())}
+          />
           <StorageFooter writes={agentWrites} />
         </>
       );
@@ -206,7 +209,11 @@ export const SwarmPipelineStageBody: React.FC<{
     case SWARM_PIPELINE_NODE_IDS.executor:
       return (
         <>
-          <ExecutionCard data={execution} strategy={strategy} />
+          <ExecutionCard
+            data={execution}
+            strategy={strategy}
+            research={research}
+          />
           <StorageFooter writes={agentWrites} />
         </>
       );
@@ -239,7 +246,7 @@ export const SwarmDataCards: React.FC<SwarmDataCardsProps> = ({
 // ── Per-agent cards ─────────────────────────────────────────────────────────
 
 const Empty: React.FC<{ label: string }> = ({ label }) => (
-  <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50/60 p-3 text-xs text-slate-500">
+  <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50/60 p-3 text-xs text-slate-500 break-words">
     {label}
   </div>
 );
@@ -267,27 +274,112 @@ const SectionHeader: React.FC<{
   </div>
 );
 
-const ResearchCard: React.FC<{ data?: ResearchData }> = ({ data }) => {
+const extractResearchHighlights = (
+  summary?: string,
+): {
+  narrative?: string;
+  fearGreed?: number;
+  trending: string[];
+} => {
+  if (!summary) return { trending: [] };
+  const fearMatch = summary.match(
+    /Fear\s*&\s*Greed[^0-9]*(\d{1,3})\s*\/\s*100/i,
+  );
+  const narrativeMatch = summary.match(
+    /\b(?:narrative|theme)\s*(?:is|:)\s*([a-z0-9_\-\s]{2,30})/i,
+  );
+  const trendingMatch = summary.match(
+    /(?:trending tokens?|top trending tokens?)\s*(?:are|:)\s*([A-Z0-9,\s]+)/i,
+  );
+  const trending = (trendingMatch?.[1] ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .slice(0, 6);
+
+  return {
+    narrative: narrativeMatch?.[1]?.trim(),
+    fearGreed: fearMatch ? Number(fearMatch[1]) : undefined,
+    trending,
+  };
+};
+
+const ResearchCard: React.FC<{
+  data?: ResearchData;
+  hasRequested?: boolean;
+}> = ({ data, hasRequested = false }) => {
   if (!data) {
+    if (!hasRequested) {
+      return (
+        <div className="rounded-xl border border-emerald-100 bg-emerald-50/40 p-3 min-w-0">
+          <SectionHeader icon="🔎" title="Researcher" />
+          <Empty label="Send a request to start live market research." />
+        </div>
+      );
+    }
     return (
-      <div className="rounded-xl border border-emerald-100 bg-emerald-50/40 p-3">
+      <div className="rounded-xl border border-emerald-200 bg-gradient-to-br from-emerald-50/90 to-white p-3 shadow-sm min-w-0">
         <SectionHeader icon="🔎" title="Researcher" />
-        <Empty label="Awaiting research candidates from the Researcher Agent." />
+        <div className="rounded-xl border border-dashed border-emerald-200 bg-white/80 p-3">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-emerald-700">
+            Live Internet Scan
+          </p>
+          <p className="mt-1 text-xs text-slate-600">
+            Fetching market/news/trending data and building candidate list.
+          </p>
+          <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-emerald-100">
+            <div className="h-full w-1/2 animate-pulse rounded-full bg-emerald-400/80" />
+          </div>
+        </div>
       </div>
     );
   }
   const candidates = data.candidates ?? [];
+  const highlights = extractResearchHighlights(data.marketSummary);
 
   return (
-    <div className="rounded-xl border border-emerald-200 bg-emerald-50/60 p-3 shadow-sm">
+    <div className="rounded-xl border border-emerald-200 bg-gradient-to-br from-emerald-50/90 to-white p-3 shadow-sm min-w-0">
       <SectionHeader
         icon="🔎"
         title="Researcher"
         badge={`${candidates.length} candidates`}
         tone="bg-emerald-100 text-emerald-700"
       />
+      {(highlights.narrative || highlights.fearGreed !== undefined) && (
+        <div className="mb-2 flex flex-wrap gap-1.5 min-w-0">
+          {highlights.narrative && (
+            <span className="max-w-full rounded-full border border-emerald-200 bg-emerald-100/80 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-700 break-words">
+              Narrative: {highlights.narrative}
+            </span>
+          )}
+          {highlights.fearGreed !== undefined && (
+            <span className="max-w-full rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[10px] font-semibold text-slate-700 break-words">
+              Fear & Greed: {highlights.fearGreed}/100
+            </span>
+          )}
+        </div>
+      )}
+      {highlights.trending.length > 0 && (
+        <div className="mb-2 rounded-lg border border-emerald-100 bg-white/70 p-2">
+          <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-emerald-700">
+            Trending (Internet)
+          </p>
+          <div className="mt-1 flex flex-wrap gap-1 min-w-0">
+            {highlights.trending.map((sym) => (
+              <span
+                key={`trend-${sym}`}
+                className="max-w-full rounded-md bg-emerald-100 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-800 break-all"
+              >
+                {sym}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
       {data.marketSummary && (
-        <p className="mb-2 text-xs text-slate-700">{data.marketSummary}</p>
+        <p className="mb-2 rounded-lg border border-emerald-100 bg-white/80 p-2 text-xs text-slate-700 break-words">
+          {data.marketSummary}
+        </p>
       )}
       {candidates.length === 0 ? (
         <Empty label="No candidates returned." />
@@ -296,12 +388,12 @@ const ResearchCard: React.FC<{ data?: ResearchData }> = ({ data }) => {
           {candidates.slice(0, 5).map((cand, idx) => (
             <li
               key={`cand-${idx}`}
-              className="flex items-center justify-between rounded-md bg-white/70 px-2 py-1.5 text-xs"
+              className="flex items-center justify-between gap-2 rounded-md border border-emerald-100 bg-white/85 px-2 py-1.5 text-xs min-w-0"
             >
-              <span className="font-semibold text-slate-800">
+              <span className="min-w-0 truncate font-semibold text-slate-800">
                 {cand.symbol ?? cand.name ?? "Unknown"}
               </span>
-              <span className="text-slate-500">
+              <span className="shrink-0 text-slate-500 text-right">
                 {typeof cand.score === "number"
                   ? `score ${cand.score.toFixed(2)}`
                   : (cand.chain ?? "—")}
@@ -322,7 +414,7 @@ const ResearchCard: React.FC<{ data?: ResearchData }> = ({ data }) => {
 const PlanCard: React.FC<{ data?: PlanData }> = ({ data }) => {
   if (!data) {
     return (
-      <div className="rounded-xl border border-blue-100 bg-blue-50/40 p-3">
+      <div className="rounded-xl border border-blue-100 bg-blue-50/40 p-3 min-w-0">
         <SectionHeader icon="🗺️" title="Planner" />
         <Empty label="Planner has not produced a TradePlan yet." />
       </div>
@@ -330,7 +422,7 @@ const PlanCard: React.FC<{ data?: PlanData }> = ({ data }) => {
   }
   const tasks = data.tasks ?? [];
   return (
-    <div className="rounded-xl border border-blue-200 bg-blue-50/60 p-3 shadow-sm">
+    <div className="rounded-xl border border-blue-200 bg-blue-50/60 p-3 shadow-sm min-w-0">
       <SectionHeader
         icon="🗺️"
         title="Planner"
@@ -338,7 +430,7 @@ const PlanCard: React.FC<{ data?: PlanData }> = ({ data }) => {
         tone="bg-blue-100 text-blue-700"
       />
       {data.strategy && (
-        <p className="mb-2 text-xs text-slate-700">
+        <p className="mb-2 text-xs text-slate-700 break-words">
           <span className="font-semibold">Strategy:</span> {data.strategy}
         </p>
       )}
@@ -346,7 +438,7 @@ const PlanCard: React.FC<{ data?: PlanData }> = ({ data }) => {
         <Empty label="No tasks defined." />
       ) : (
         <ol className="space-y-1.5">
-          {tasks.slice(0, 6).map((task, idx) => {
+          {tasks.slice(0, 8).map((task, idx) => {
             // Backend emits `{ agentId, action }` (canonical AgentTask shape);
             // older payloads used `{ agent, description }` so we accept both.
             const agentLabel =
@@ -361,12 +453,12 @@ const PlanCard: React.FC<{ data?: PlanData }> = ({ data }) => {
                   <span className="text-[10px] font-bold text-blue-500 tabular-nums">
                     {idx + 1}.
                   </span>
-                  <span className="font-semibold capitalize text-blue-700">
+                  <span className="min-w-0 break-words font-semibold capitalize text-blue-700">
                     {agentLabel}
                   </span>
                 </div>
                 {actionLabel && (
-                  <p className="mt-0.5 text-[11px] leading-snug text-slate-700">
+                  <p className="mt-0.5 text-[11px] leading-snug text-slate-700 break-words">
                     {actionLabel}
                   </p>
                 )}
@@ -447,7 +539,7 @@ const renderWithLinks = (text: string): React.ReactNode[] => {
 const RiskCard: React.FC<{ data?: RiskData }> = ({ data }) => {
   if (!data) {
     return (
-      <div className="rounded-xl border border-orange-100 bg-orange-50/40 p-3">
+      <div className="rounded-xl border border-orange-100 bg-orange-50/40 p-3 min-w-0">
         <SectionHeader icon="🛡️" title="Risk" />
         <Empty label="Risk has not scored any candidates yet." />
       </div>
@@ -455,7 +547,7 @@ const RiskCard: React.FC<{ data?: RiskData }> = ({ data }) => {
   }
   const passed = data.filter((entry) => entry.passed).length;
   return (
-    <div className="rounded-xl border border-orange-200 bg-orange-50/60 p-3 shadow-sm">
+    <div className="rounded-xl border border-orange-200 bg-orange-50/60 p-3 shadow-sm min-w-0">
       <SectionHeader
         icon="🛡️"
         title="Risk"
@@ -487,7 +579,7 @@ const RiskCard: React.FC<{ data?: RiskData }> = ({ data }) => {
                     : "border-rose-200 bg-rose-50/60"
                 }`}
               >
-                <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center justify-between gap-2 min-w-0">
                   <div className="flex items-baseline gap-2 min-w-0">
                     <span className="font-semibold text-slate-800 truncate">
                       {symbol}
@@ -527,7 +619,7 @@ const RiskCard: React.FC<{ data?: RiskData }> = ({ data }) => {
                           {formatFlagType(flag.type)}
                         </span>
                         {flag.detail && (
-                          <span className="mt-0.5 block text-slate-700">
+                          <span className="mt-0.5 block text-slate-700 break-words">
                             {renderWithLinks(flag.detail)}
                           </span>
                         )}
@@ -543,7 +635,7 @@ const RiskCard: React.FC<{ data?: RiskData }> = ({ data }) => {
                 )}
 
                 {reason && (
-                  <p className="mt-1 text-[11px] leading-snug text-slate-600">
+                  <p className="mt-1 text-[11px] leading-snug text-slate-600 break-words">
                     {renderWithLinks(reason)}
                   </p>
                 )}
@@ -559,7 +651,7 @@ const RiskCard: React.FC<{ data?: RiskData }> = ({ data }) => {
 const StrategyCard: React.FC<{ data?: StrategyData }> = ({ data }) => {
   if (!data) {
     return (
-      <div className="rounded-xl border border-violet-100 bg-violet-50/40 p-3">
+      <div className="rounded-xl border border-violet-100 bg-violet-50/40 p-3 min-w-0">
         <SectionHeader icon="🎯" title="Strategy" />
         <Empty label="Strategy is awaiting risk-approved candidates." />
       </div>
@@ -570,14 +662,14 @@ const StrategyCard: React.FC<{ data?: StrategyData }> = ({ data }) => {
       ? `${data.tokenInSymbol} → ${data.tokenOutSymbol}`
       : "—";
   return (
-    <div className="rounded-xl border border-violet-200 bg-violet-50/60 p-3 shadow-sm">
+    <div className="rounded-xl border border-violet-200 bg-violet-50/60 p-3 shadow-sm min-w-0">
       <SectionHeader
         icon="🎯"
         title="Strategy"
         badge={pair}
         tone="bg-violet-100 text-violet-700"
       />
-      <div className="grid grid-cols-2 gap-2 text-xs text-slate-700">
+      <div className="grid grid-cols-1 gap-2 text-xs text-slate-700 sm:grid-cols-2">
         <div className="rounded-md bg-white/80 p-2">
           <span className="block text-[10px] uppercase tracking-wide text-violet-600">
             Size
@@ -604,7 +696,9 @@ const StrategyCard: React.FC<{ data?: StrategyData }> = ({ data }) => {
         </div>
       </div>
       {data.rationale && (
-        <p className="mt-2 text-xs text-slate-600">{data.rationale}</p>
+        <p className="mt-2 text-xs text-slate-600 break-words">
+          {data.rationale}
+        </p>
       )}
     </div>
   );
@@ -613,14 +707,14 @@ const StrategyCard: React.FC<{ data?: StrategyData }> = ({ data }) => {
 const CritiqueCard: React.FC<{ data?: CritiqueData }> = ({ data }) => {
   if (!data) {
     return (
-      <div className="rounded-xl border border-rose-100 bg-rose-50/40 p-3">
+      <div className="rounded-xl border border-rose-100 bg-rose-50/40 p-3 min-w-0">
         <SectionHeader icon="⚖️" title="Critic" />
         <Empty label="Critic has not weighed in yet." />
       </div>
     );
   }
   return (
-    <div className="rounded-xl border border-rose-200 bg-rose-50/60 p-3 shadow-sm">
+    <div className="rounded-xl border border-rose-200 bg-rose-50/60 p-3 shadow-sm min-w-0">
       <SectionHeader
         icon="⚖️"
         title="Critic"
@@ -638,10 +732,10 @@ const CritiqueCard: React.FC<{ data?: CritiqueData }> = ({ data }) => {
         </p>
       )}
       {data.notes && (
-        <p className="mt-1 text-xs text-slate-600">{data.notes}</p>
+        <p className="mt-1 text-xs text-slate-600 break-words">{data.notes}</p>
       )}
       {data.issues && data.issues.length > 0 && (
-        <ul className="mt-2 list-disc space-y-0.5 pl-4 text-xs text-rose-700">
+        <ul className="mt-2 list-disc space-y-0.5 pl-4 text-xs text-rose-700 break-words">
           {data.issues.map((issue, idx) => (
             <li key={`crit-${idx}`}>{issue}</li>
           ))}
@@ -668,13 +762,17 @@ type WalletPortfolio = {
 const ExecutionCard: React.FC<{
   data?: ExecutionData;
   strategy?: StrategyData;
-}> = ({ data, strategy }) => {
+  research?: ResearchData;
+}> = ({ data, strategy, research }) => {
   const { open } = useAppKit();
   const { address, isConnected } = useAppKitAccount();
   const { walletProvider } = useAppKitProvider("eip155");
   const [portfolio, setPortfolio] = useState<WalletPortfolio | null>(null);
   const [swapOpen, setSwapOpen] = useState(false);
   const [selectedToken, setSelectedToken] = useState<string>("");
+  const [selectedTokenOut, setSelectedTokenOut] = useState<string>(
+    strategy?.tokenOut ?? "",
+  );
   const [slippagePct, setSlippagePct] = useState<string>(
     String(strategy?.slippagePct ?? 1.5),
   );
@@ -748,12 +846,52 @@ const ExecutionCard: React.FC<{
   ]);
 
   const tokenOptions = portfolio?.nonZeroBalances ?? [];
+  const candidateTokenOptions = useMemo(() => {
+    const seen = new Set<string>();
+    const raw = research?.candidates ?? [];
+    const out: Array<{ symbol: string; address: string }> = [];
+    for (const c of raw) {
+      const address =
+        typeof c.address === "string" && c.address.startsWith("0x")
+          ? c.address
+          : "";
+      const symbol =
+        typeof c.symbol === "string" && c.symbol.trim().length > 0
+          ? c.symbol.trim().toUpperCase()
+          : "";
+      if (!address || !symbol) continue;
+      const key = address.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ symbol, address });
+    }
+    return out;
+  }, [research?.candidates]);
   const chosen = useMemo(
     () => tokenOptions.find((t) => t.address === selectedToken),
     [tokenOptions, selectedToken],
   );
-  const tokenOutAddress = strategy?.tokenOut;
-  const tokenOutSymbol = strategy?.tokenOutSymbol ?? "target token";
+  const chosenTokenOut = useMemo(
+    () =>
+      candidateTokenOptions.find(
+        (t) => t.address.toLowerCase() === selectedTokenOut.toLowerCase(),
+      ),
+    [candidateTokenOptions, selectedTokenOut],
+  );
+
+  useEffect(() => {
+    if (strategy?.tokenOut) {
+      setSelectedTokenOut(strategy.tokenOut);
+      return;
+    }
+    if (!selectedTokenOut && candidateTokenOptions.length > 0) {
+      setSelectedTokenOut(candidateTokenOptions[0]!.address);
+    }
+  }, [strategy?.tokenOut, candidateTokenOptions, selectedTokenOut]);
+
+  const tokenOutAddress = selectedTokenOut || strategy?.tokenOut;
+  const tokenOutSymbol =
+    chosenTokenOut?.symbol ?? strategy?.tokenOutSymbol ?? "target token";
 
   const slippageValue = Number(slippagePct);
   const slippageInvalid =
@@ -894,14 +1032,14 @@ const ExecutionCard: React.FC<{
 
   if (!data) {
     return (
-      <div className="rounded-xl border border-green-100 bg-green-50/40 p-3">
+      <div className="rounded-xl border border-green-100 bg-green-50/40 p-3 min-w-0">
         <SectionHeader icon="⚡" title="Executor" />
         <Empty label="Executor stands by until you approve the trade." />
       </div>
     );
   }
   return (
-    <div className="rounded-xl border border-green-200 bg-green-50/60 p-3 shadow-sm">
+    <div className="rounded-xl border border-green-200 bg-green-50/60 p-3 shadow-sm min-w-0">
       <SectionHeader
         icon="⚡"
         title="Executor"
@@ -919,7 +1057,7 @@ const ExecutionCard: React.FC<{
         }
       />
       {data?.pair && (
-        <p className="text-xs text-slate-700">
+        <p className="text-xs text-slate-700 break-words">
           Pair: <span className="font-semibold">{data?.pair}</span>
         </p>
       )}
@@ -935,7 +1073,9 @@ const ExecutionCard: React.FC<{
         </a>
       )}
       {data?.rationale && (
-        <p className="mt-1 text-xs text-slate-600">{data?.rationale}</p>
+        <p className="mt-1 text-xs text-slate-600 break-words">
+          {data?.rationale}
+        </p>
       )}
       {!data?.success && tokenOutAddress && (
         <button
@@ -976,14 +1116,14 @@ const ExecutionCard: React.FC<{
                 stage. Strategy data is prefilled so you can execute quickly.
               </p>
 
-              <div className="grid gap-5 md:grid-cols-[1.2fr_1fr]">
+              <div className="grid gap-5 lg:grid-cols-[1.2fr_1fr]">
                 <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-4">
                   <p className="mb-3 text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
                     Swap Input
                   </p>
                   <p className="mb-3 text-xs text-slate-600">
-                    Ethereum mainnet only. To asset comes from pipeline
-                    strategy.
+                    Ethereum mainnet only. Pick any wallet token as input and
+                    choose one of the researched candidate tokens as output.
                   </p>
                   <p className="mb-3 rounded-md border border-slate-200 bg-white/80 px-2 py-1 text-[11px] text-slate-700">
                     Chain:{" "}
@@ -991,7 +1131,7 @@ const ExecutionCard: React.FC<{
                   </p>
 
                   <label className="mb-1 block text-[11px] font-semibold text-slate-600">
-                    From asset
+                    From wallet asset
                   </label>
                   <select
                     value={selectedToken}
@@ -1009,10 +1149,28 @@ const ExecutionCard: React.FC<{
                     )}
                   </select>
 
-                  <p className="mb-3 rounded-md border border-slate-200 bg-white/80 px-2 py-1 text-[11px] text-slate-700">
-                    To asset:{" "}
-                    <span className="font-semibold">{tokenOutSymbol}</span>
-                  </p>
+                  <label className="mb-1 block text-[11px] font-semibold text-slate-600">
+                    To candidate token
+                  </label>
+                  <select
+                    value={selectedTokenOut}
+                    onChange={(e) => setSelectedTokenOut(e.target.value)}
+                    className="mb-3 w-full rounded-md border border-slate-300 px-2 py-2 text-xs"
+                  >
+                    {candidateTokenOptions.length === 0 ? (
+                      <option value={strategy?.tokenOut ?? ""}>
+                        {strategy?.tokenOutSymbol
+                          ? `${strategy.tokenOutSymbol} (strategy default)`
+                          : "No candidate tokens available"}
+                      </option>
+                    ) : (
+                      candidateTokenOptions.map((t) => (
+                        <option key={t.address} value={t.address}>
+                          {t.symbol}
+                        </option>
+                      ))
+                    )}
+                  </select>
 
                   <label className="mb-1 block text-[11px] font-semibold text-slate-600">
                     Amount
@@ -1077,7 +1235,7 @@ const ExecutionCard: React.FC<{
                   </button>
                 </div>
 
-                <div className="rounded-xl border border-cyan-200 bg-cyan-50/60 p-4">
+                <div className="rounded-xl border border-cyan-200 bg-cyan-50/60 p-4 min-w-0">
                   <p className="mb-3 text-xs font-semibold uppercase tracking-[0.14em] text-cyan-700">
                     Executor Strategy Context
                   </p>
@@ -1110,7 +1268,7 @@ const ExecutionCard: React.FC<{
                     </div>
                   </div>
                   {strategy?.rationale && (
-                    <p className="mt-3 rounded-md bg-white/70 p-2 text-[11px] text-slate-600">
+                    <p className="mt-3 rounded-md bg-white/70 p-2 text-[11px] text-slate-600 break-words">
                       {strategy.rationale}
                     </p>
                   )}
@@ -1151,7 +1309,7 @@ const StorageAuditCard: React.FC<{ writes?: AgentStorageWrite[] }> = ({
   const entries = writes ?? [];
   if (entries.length === 0) {
     return (
-      <div className="rounded-xl border border-cyan-100 bg-cyan-50/40 p-3">
+      <div className="rounded-xl border border-cyan-100 bg-cyan-50/40 p-3 min-w-0">
         <SectionHeader icon="🗄️" title="0G Storage Audit" />
         <Empty label="No agent writes yet — storage hashes will appear here as agents save." />
       </div>
@@ -1163,7 +1321,7 @@ const StorageAuditCard: React.FC<{ writes?: AgentStorageWrite[] }> = ({
   const totalBytes = entries.reduce((sum, e) => sum + (e.sizeBytes ?? 0), 0);
 
   return (
-    <div className="rounded-xl border border-cyan-200 bg-cyan-50/60 p-3 shadow-sm">
+    <div className="rounded-xl border border-cyan-200 bg-cyan-50/60 p-3 shadow-sm min-w-0">
       <SectionHeader
         icon="🗄️"
         title="0G Storage Audit"
@@ -1197,7 +1355,7 @@ const StorageAuditCard: React.FC<{ writes?: AgentStorageWrite[] }> = ({
                   {isLocal ? "local" : "0G ✓"}
                 </span>
               </div>
-              <div className="mt-1 flex items-center justify-between gap-2 font-mono text-[10px] text-slate-600">
+              <div className="mt-1 flex items-center justify-between gap-2 font-mono text-[10px] text-slate-600 min-w-0">
                 <span className="truncate">{formatHashShort(entry.hash)}</span>
                 <span className="shrink-0 tabular-nums text-slate-500">
                   {formatBytes(entry.sizeBytes ?? 0)} · {formatTime(entry.ts)}

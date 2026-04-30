@@ -34,13 +34,14 @@ Decision rules based on narrative:
 - neutral / greed > 70: balanced — use liquidityUSD as tiebreaker
 - ALWAYS prefer tokens that appear in BOTH trendingTokens AND pool data
 
-IMPORTANT — narrative drives candidate selection:
-- The detected narrative (defi, ai, l2, staking, safe_haven, neutral) determines which tokens to prioritise.
-- The user's "Trading goal" text informs risk tolerance and position sizing ONLY — it must NOT override the narrative-based token selection rules above.
-- For example: if goal says "safe haven" but narrative is "defi", you still pick AAVE/CRV/UNI — not WBTC/ETH.
+IMPORTANT — reconcile narrative with explicit user intent:
+- If the user goal explicitly asks for a category (e.g., "layer 2 tokens", "AI tokens", "DeFi tokens"), that goal focus MUST take priority for candidate selection.
+- Narrative remains the default ranking signal when goal text is generic.
+- If goal-focused tokens are unavailable in live pool data, fall back to narrative-aligned liquid tokens and state that constraint in marketSummary.
 
 General rules:
-- Return between 3 and 5 candidates. Never fewer than 3 unless the pool data has fewer than 3 qualifying entries.
+- Return between 5 and 10 candidates. Cover as many distinct non-stablecoin tokens from the pool data as possible — do NOT stop at 3 or 5 if more qualifying pools exist.
+- Rank by a combination of: narrative alignment, liquidityUSD depth, 24h volume, and positive price momentum.
 - Use the provided liquidityUSD value directly — do NOT re-estimate or recalculate it
 - Only include candidates where liquidityUSD meets the minLiquidityUSD constraint
 - Never repeat the same symbol twice in candidates

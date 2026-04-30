@@ -35,6 +35,7 @@ import {
 import {
   fetchCoinGeckoMarketData as fetchCoinGeckoMarketDataService,
   fetchDefiLlamaHistoricalChanges,
+  fetchGoalFocusSymbols,
   fetchNarrativeSignal,
   fetchOnChainPools,
   populateLiquidityUSD,
@@ -244,6 +245,19 @@ export class ResearchAgent {
         3,
       );
     }
+
+    const goalFocus = this.detectGoalFocus(goal);
+    const focusSymbolsDynamic = goalFocus
+      ? await fetchGoalFocusSymbols(goalFocus)
+      : [];
+    report.candidates = this.applyGoalAwareOrdering(
+      report.candidates,
+      pools,
+      marketData,
+      cfg.MIN_LIQUIDITY_USD,
+      goalFocus,
+      focusSymbolsDynamic,
+    );
 
     await this.memory.write(
       ResearchAgent.MEMORY_KEY,
@@ -719,6 +733,138 @@ export class ResearchAgent {
       logger.info(
         `[Researcher] Topped up candidates from ${existing.length} → ${filled.length} (fallback pools)`,
       );
+    }
+
+    return filled;
+  }
+
+  private detectGoalFocus(
+    goal: string,
+  ): "l2" | "ai" | "defi" | "staking" | "safe_haven" | null {
+    const g = goal.toLowerCase();
+    if (/\b(layer[\s-]?2|l2|arbitrum|optimism|polygon|rollup|zk)\b/.test(g)) {
+      return "l2";
+    }
+    if (
+      /\b(ai|artificial intelligence|agentic|machine learning|llm)\b/.test(g)
+    ) {
+      return "ai";
+    }
+    if (/\b(defi|dex|amm|lending|yield)\b/.test(g)) {
+      return "defi";
+    }
+    if (/\b(staking|stake|validator|restaking|lido|rocket pool)\b/.test(g)) {
+      return "staking";
+    }
+    if (/\b(safe haven|defensive|capital preservation|btc|bitcoin)\b/.test(g)) {
+      return "safe_haven";
+    }
+    return null;
+  }
+
+  private applyGoalAwareOrdering(
+    candidates: TokenCandidate[],
+    pools: PoolSnapshot[],
+    marketData: Map<string, CoinGeckoMarketData>,
+    minLiquidityUSD: number,
+    goalFocus: "l2" | "ai" | "defi" | "staking" | "safe_haven" | null,
+    focusSymbolsDynamic: string[],
+  ): TokenCandidate[] {
+    if (!goalFocus) return candidates;
+
+    const focusSymbols = new Set(
+      focusSymbolsDynamic.map((s) => s.toUpperCase()),
+    );
+    if (focusSymbols.size === 0) {
+      logger.info(
+        `[Researcher] Goal focus=${goalFocus} requested but internet symbol discovery returned none; keeping default ordering`,
+      );
+      return candidates;
+    }
+
+    // Ensure focused symbols missing from LLM output are pulled from live pools.
+    const seeded = this.topUpFocusCandidates(
+      candidates,
+      pools,
+      marketData,
+      minLiquidityUSD,
+      focusSymbols,
+    );
+
+    const focused = seeded.filter((c) =>
+      focusSymbols.has(c.symbol.toUpperCase()),
+    );
+    const nonFocused = seeded.filter(
+      (c) => !focusSymbols.has(c.symbol.toUpperCase()),
+    );
+
+    const sortBySafetyUtility = (a: TokenCandidate, b: TokenCandidate) => {
+      // Higher liquidity and volume are safer/useful; lower absolute vol is safer.
+      const liq = b.liquidityUSD - a.liquidityUSD;
+      if (liq !== 0) return liq;
+      const vol = (b.volume24hUSD ?? 0) - (a.volume24hUSD ?? 0);
+      if (vol !== 0) return vol;
+      const av = Math.abs(a.priceChange24hPct ?? 0);
+      const bv = Math.abs(b.priceChange24hPct ?? 0);
+      return av - bv;
+    };
+
+    focused.sort(sortBySafetyUtility);
+    nonFocused.sort(sortBySafetyUtility);
+
+    if (focused.length > 0) {
+      logger.info(
+        `[Researcher] Goal focus=${goalFocus}: prioritizing ${focused.length} focus candidate(s) ahead of ${nonFocused.length} non-focus candidate(s)`,
+      );
+      // Goal-specific asks (e.g. "find L2 tokens") should return focused tokens first.
+      return [...focused, ...nonFocused];
+    }
+
+    logger.info(
+      `[Researcher] Goal focus=${goalFocus} requested but no focus tokens passed validation; returning best available candidates`,
+    );
+    return seeded.sort(sortBySafetyUtility);
+  }
+
+  private topUpFocusCandidates(
+    existing: TokenCandidate[],
+    pools: PoolSnapshot[],
+    marketData: Map<string, CoinGeckoMarketData>,
+    minLiquidityUSD: number,
+    focusSymbols: Set<string>,
+  ): TokenCandidate[] {
+    const seen = new Set(existing.map((c) => c.symbol.toUpperCase()));
+    const filled = [...existing];
+
+    const focusPools = pools
+      .filter((p) => focusSymbols.has(p.tokenSymbol.toUpperCase()))
+      .filter((p) => p.liquidityUSD >= minLiquidityUSD)
+      .filter(
+        (p) =>
+          !isStablecoin({ symbol: p.tokenSymbol, address: p.tokenAddress }),
+      )
+      .sort((a, b) => b.liquidityUSD - a.liquidityUSD);
+
+    for (const pool of focusPools) {
+      const sym = pool.tokenSymbol.toUpperCase();
+      if (seen.has(sym)) continue;
+      seen.add(sym);
+      const cg = marketData.get(sym);
+      filled.push({
+        address: this.toChecksumSafe(
+          SYMBOL_TO_TOKEN[sym]?.address ?? pool.tokenAddress,
+        ),
+        symbol: sym,
+        name: pool.tokenName || sym,
+        pairAddress: this.toChecksumSafe(pool.poolAddress),
+        baseToken: pool.baseTokenSymbol,
+        priceUSD: cg?.price_usd ?? pool.currentPrice,
+        liquidityUSD: pool.liquidityUSD,
+        volume24hUSD: cg?.volume_24h_usd ?? 0,
+        priceChange24hPct: cg?.price_change_24h_pct ?? 0,
+        poolFeeTier: pool.feePct,
+        txCount: 0,
+      });
     }
 
     return filled;

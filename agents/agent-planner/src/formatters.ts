@@ -116,8 +116,10 @@ export function buildParameterizedTasks(
   },
 ): Array<{ agentId: string; action: string; input?: Record<string, unknown> }> {
   if (candidates.length === 0) return [];
-  const symbols = candidates.map((c) => c.symbol).slice(0, 3);
-  const addresses = candidates.map((c) => c.address).slice(0, 3);
+  // Keep the full candidate set from Researcher for downstream agents.
+  // This avoids silently truncating to top-N before risk/strategy context is built.
+  const symbols = candidates.map((c) => c.symbol);
+  const addresses = candidates.map((c) => c.address);
   // These are safe: candidates.length > 0 is confirmed above
   const first = candidates[0]!;
   const second = candidates[1];
@@ -175,7 +177,7 @@ export function buildParameterizedTasks(
           agentId: "strategy",
           action: `Build atomic arbitrage path: buy ${symbols[0]} in pool A, sell in pool B if spread >0.5% after gas`,
           input: {
-            tokens: addresses.slice(0, 2),
+            tokens: addresses,
             minSpreadPct: 0.5,
           },
         },
@@ -191,7 +193,7 @@ export function buildParameterizedTasks(
           agentId: "executor",
           action: `Execute atomic arbitrage via Uniswap multi-protocol API with flashloan if needed, revert on unprofitable`,
           input: {
-            tokens: addresses.slice(0, 2),
+            tokens: addresses,
             atomicRevert: true,
           },
         },
