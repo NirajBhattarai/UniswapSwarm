@@ -25,15 +25,19 @@ pnpm --filter web dev
 
 ## Required environment
 
-The web app reads environment variables from root `.env` via the workspace setup.
-Commonly needed values:
+The web app reads its environment from `apps/web/.env`.
 
-- `GOOGLE_GENERATIVE_AI_API_KEY` (or `GOOGLE_API_KEY` / `GEMINI_API_KEY`)
-- `COPILOTKIT_MODEL` (default `gemini-2.5-flash`)
-- `NEXT_PUBLIC_ORCHESTRATOR_URL` (default `http://localhost:4000`)
-- `NEXT_PUBLIC_COPILOTKIT_RUNTIME_URL` (default `/api/copilotkit`)
-- `NEXT_PUBLIC_REOWN_PROJECT_ID` (for wallet connect)
-- `UNISWAP_API_KEY` (required for `/api/swap/prepare` and `/api/swap/execute`)
+Required or commonly needed values:
+
+- `GOOGLE_GENERATIVE_AI_API_KEY` (required)
+- `NEXT_PUBLIC_REOWN_PROJECT_ID` for wallet connect
+- `UNISWAP_API_KEY` for `/api/swap/prepare` and `/api/swap/execute`
+- `ALCHEMY_API_KEY` for `/api/wallet/portfolio` token balances
+- `COPILOTKIT_MODEL` default: `gemini-2.5-flash`
+- `NEXT_PUBLIC_ORCHESTRATOR_URL` default: `http://localhost:4000`
+- `ORCHESTRATOR_URL` default: `http://localhost:4000`
+- `NEXT_PUBLIC_COPILOTKIT_RUNTIME_URL` default: `/api/copilotkit`
+- `ETH_RPC_URL` optional fallback RPC for native ETH balance reads
 
 ## Architecture pointers
 

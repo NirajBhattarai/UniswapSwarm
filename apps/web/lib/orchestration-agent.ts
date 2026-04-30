@@ -48,11 +48,7 @@ interface SwarmOrchestrationAgentConfig extends AgentConfig {
  * conventional env var names so the orchestrator works whichever the user set.
  */
 export function resolveGeminiKey(): string | undefined {
-  return (
-    process.env.GOOGLE_GENERATIVE_AI_API_KEY ??
-    process.env.GOOGLE_API_KEY ??
-    process.env.GEMINI_API_KEY
-  );
+  return process.env.GOOGLE_GENERATIVE_AI_API_KEY;
 }
 
 export class SwarmOrchestrationAgent extends AbstractAgent {

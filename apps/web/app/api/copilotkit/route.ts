@@ -183,7 +183,7 @@ async function handleCopilotRequest(request: NextRequest) {
     return new Response(
       JSON.stringify({
         error:
-          "Gemini API key missing. Set GOOGLE_GENERATIVE_AI_API_KEY (preferred) or GOOGLE_API_KEY / GEMINI_API_KEY in apps/web/.env.local or project root .env, then restart dev server.",
+          "Gemini API key missing. Set GOOGLE_GENERATIVE_AI_API_KEY in apps/web/.env, then restart dev server.",
       }),
       { status: 500, headers: { "Content-Type": "application/json" } },
     );
