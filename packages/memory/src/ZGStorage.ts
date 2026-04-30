@@ -1,7 +1,5 @@
 import { Indexer, MemData } from "@0gfoundation/0g-ts-sdk";
 import { ethers } from "ethers";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
 import { getConfig, logger } from "@swarm/shared";
 
 // ─── ZGStorage ────────────────────────────────────────────────────────────────
@@ -18,8 +16,6 @@ export class ZGStorage {
   private readonly indexer: Indexer;
   private readonly wallet: ethers.Wallet;
   private readonly chainRpc: string;
-  private readonly persistPath: string;
-  private persistWriteQueue: Promise<void> = Promise.resolve();
   private ready = false;
 
   constructor() {
@@ -28,11 +24,6 @@ export class ZGStorage {
     const provider = new ethers.JsonRpcProvider(cfg.ZG_CHAIN_RPC);
     this.wallet = new ethers.Wallet(cfg.ZG_PRIVATE_KEY, provider);
     this.indexer = new Indexer(cfg.ZG_INDEXER_RPC);
-    this.persistPath = resolve(
-      process.cwd(),
-      ".swarm",
-      "persisted-memory.json",
-    );
   }
 
   // ── Init ────────────────────────────────────────────────────────────────────
@@ -57,14 +48,35 @@ export class ZGStorage {
   // ── Write ───────────────────────────────────────────────────────────────────
 
   /**
-   * Serialize `data` to JSON and upload it as a file blob to 0G Storage.
-   * Returns the content root hash on success.
+   * Store one blackboard entry in 0G as a JSON blob and return its root hash.
+   *
+   * `agentId`:
+   * - The writer/owner agent id (for example: "planner", "researcher", "risk").
+   *
+   * `tag`:
+   * - The memory key used as the logical lookup label.
+   * - In this repo keys follow "<agentId>/<slot>" (for example "planner/plan").
+   * - Session scoping is carried inside `tag` via BlackboardMemory namespace.
+   *   Orchestrator currently uses `sessions/<sessionId>` as namespace.
+   * - Effective key example: "sessions/<sessionId>/planner/plan".
+   *
+   * `data`:
+   * - The payload to persist (string, object, array, etc).
+   * - It must be JSON-serializable because it is encoded with JSON.stringify.
+   *
+   * `meta`:
+   * - Optional metadata for higher-level memory semantics.
+   * - Current shape is `{ role?: string }` from BlackboardMemory.
+   * - It is accepted for interface compatibility, but currently not written.
+   *
+   * Example:
+   * `await storage.store("planner", "sessions/8a2f.../planner/plan", { goals: ["ship-v1"] }, { role: "planner" });`
    */
   async store(
     agentId: string,
     tag: string,
     data: unknown,
-    meta?: { role?: string },
+    _meta?: { role?: string },
   ): Promise<string> {
     this.assertReady();
 
@@ -106,38 +118,11 @@ export class ZGStorage {
       `[ZGStorage] Wrote "${tag}" → rootHash=${rootHash.slice(0, 20)}…`,
     );
 
-    void this.persistRecord(tag, {
-      tag,
-      agentId,
-      role: meta?.role ?? agentId,
-      data,
-      rootHash,
-      ts: Date.now(),
-    });
     return rootHash;
   }
 
-  // ── Read ────────────────────────────────────────────────────────────────────
-
-  /**
-   * Retrieve is not supported in file-upload mode (no KV lookup).
-   * Returns null — agents re-fetch from in-memory blackboard instead.
-   */
-  async retrieve<T = unknown>(
-    _agentId: string,
-    tag: string,
-  ): Promise<T | null> {
-    const all = await this.readPersistedRecords();
-    const record = all[tag];
-    if (!record) return null;
-    return record.data as T;
-  }
-
-  async listByPrefix(prefix: string): Promise<PersistedRecord[]> {
-    const all = await this.readPersistedRecords();
-    return Object.values(all)
-      .filter((record) => record.tag.startsWith(prefix))
-      .sort((a, b) => a.ts - b.ts);
+  async listByPrefix(_prefix: string): Promise<PersistedRecord[]> {
+    return [];
   }
 
   // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -146,45 +131,6 @@ export class ZGStorage {
     if (!this.ready) {
       throw new Error("[ZGStorage] Not initialised — call init() first");
     }
-  }
-
-  private async persistRecord(
-    key: string,
-    record: PersistedRecord,
-  ): Promise<void> {
-    this.persistWriteQueue = this.persistWriteQueue
-      .then(async () => {
-        const all = await this.readPersistedRecords();
-        all[key] = record;
-        await this.writePersistedRecords(all);
-      })
-      .catch((error) => {
-        const message = error instanceof Error ? error.message : String(error);
-        logger.warn(
-          `[ZGStorage] Failed to persist local memory index: ${message}`,
-        );
-      });
-    await this.persistWriteQueue;
-  }
-
-  private async readPersistedRecords(): Promise<
-    Record<string, PersistedRecord>
-  > {
-    try {
-      const raw = await readFile(this.persistPath, "utf8");
-      const parsed = JSON.parse(raw) as unknown;
-      if (typeof parsed !== "object" || parsed === null) return {};
-      return parsed as Record<string, PersistedRecord>;
-    } catch {
-      return {};
-    }
-  }
-
-  private async writePersistedRecords(
-    all: Record<string, PersistedRecord>,
-  ): Promise<void> {
-    await mkdir(dirname(this.persistPath), { recursive: true });
-    await writeFile(this.persistPath, JSON.stringify(all, null, 2), "utf8");
   }
 }
 

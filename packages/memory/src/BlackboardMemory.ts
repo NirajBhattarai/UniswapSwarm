@@ -36,18 +36,43 @@ export class BlackboardMemory {
     role: string,
     value: unknown,
   ): Promise<MemoryEntry> {
-    const json = JSON.stringify(value);
     const storageKey = this.scopedKey(key);
-    const hash = this.storage
-      ? await this.storage
-          .store(agentId, storageKey, value, { role })
-          .catch(() => {
-            const h = crypto.createHash("sha256").update(json).digest("hex");
-            return `local:${h}`;
-          })
-      : `local:${crypto.createHash("sha256").update(json).digest("hex")}`;
+    const hash = await this.resolveHash(agentId, role, storageKey, value);
+    const entry = this.buildEntry(key, agentId, role, value, hash);
 
-    const entry: MemoryEntry = {
+    this.cache.set(key, entry);
+    logger.info(
+      `[Memory${this.namespace ? `:${this.namespace}` : ""}] ${role} wrote "${key}"  hash=${hash.slice(0, 20)}…`,
+    );
+    return entry;
+  }
+
+  private async resolveHash(
+    agentId: string,
+    role: string,
+    storageKey: string,
+    value: unknown,
+  ): Promise<string> {
+    if (!this.storage) return this.computeLocalHash(value);
+    return this.storage
+      .store(agentId, storageKey, value, { role })
+      .catch(() => this.computeLocalHash(value));
+  }
+
+  private computeLocalHash(value: unknown): string {
+    const json = JSON.stringify(value);
+    const digest = crypto.createHash("sha256").update(json).digest("hex");
+    return `local:${digest}`;
+  }
+
+  private buildEntry(
+    key: string,
+    agentId: string,
+    role: string,
+    value: unknown,
+    hash: string,
+  ): MemoryEntry {
+    return {
       key,
       agentId,
       role,
@@ -55,12 +80,6 @@ export class BlackboardMemory {
       hash,
       ts: Date.now(),
     };
-
-    this.cache.set(key, entry);
-    logger.info(
-      `[Memory${this.namespace ? `:${this.namespace}` : ""}] ${role} wrote "${key}"  hash=${hash.slice(0, 20)}…`,
-    );
-    return entry;
   }
 
   // ── Read ────────────────────────────────────────────────────────────────────
@@ -111,35 +130,82 @@ export class BlackboardMemory {
   }
 
   async hydrateFromStorage(): Promise<number> {
-    if (!this.storage) return 0;
-    if (this.hydrated) return 0;
+    if (this.shouldSkipHydration()) return 0;
+    const persisted = await this.fetchPersistedRecords();
+    const loaded = this.hydrateCache(persisted);
+    this.hydrated = true;
+    this.logHydrationResult(loaded);
+    return loaded;
+  }
 
+  private shouldSkipHydration(): boolean {
+    return !this.storage || this.hydrated;
+  }
+
+  private async fetchPersistedRecords(): Promise<
+    Array<{
+      tag: string;
+      agentId: string;
+      role: string;
+      data: unknown;
+      rootHash: string;
+      ts: number;
+    }>
+  > {
+    if (!this.storage) return [];
     const prefix = this.namespace ? `${this.namespace}/` : "";
-    const persisted = await this.storage.listByPrefix(prefix);
-    let loaded = 0;
+    return (await this.storage.listByPrefix(prefix)) ?? [];
+  }
 
+  private hydrateCache(
+    persisted: Array<{
+      tag: string;
+      agentId: string;
+      role: string;
+      data: unknown;
+      rootHash: string;
+      ts: number;
+    }>,
+  ): number {
+    let loaded = 0;
     for (const item of persisted) {
-      const key = this.namespace
-        ? item.tag.replace(`${this.namespace}/`, "")
-        : item.tag;
+      const key = this.toCacheKey(item.tag);
       if (!key) continue;
-      this.cache.set(key, {
+      this.cache.set(
         key,
-        agentId: item.agentId,
-        role: item.role,
-        value: item.data,
-        hash: item.rootHash,
-        ts: item.ts,
-      });
+        this.buildHydratedEntry(
+          key,
+          item.agentId,
+          item.role,
+          item.data,
+          item.rootHash,
+          item.ts,
+        ),
+      );
       loaded += 1;
     }
-
-    this.hydrated = true;
-    if (loaded > 0) {
-      logger.info(
-        `[Memory${this.namespace ? `:${this.namespace}` : ""}] hydrated ${loaded} key(s) from persistent index`,
-      );
-    }
     return loaded;
+  }
+
+  private toCacheKey(tag: string): string {
+    return this.namespace ? tag.replace(`${this.namespace}/`, "") : tag;
+  }
+
+  private buildHydratedEntry(
+    key: string,
+    agentId: string,
+    role: string,
+    value: unknown,
+    hash: string,
+    ts: number,
+  ): MemoryEntry {
+    return { key, agentId, role, value, hash, ts };
+  }
+
+  private logHydrationResult(loaded: number): void {
+    if (loaded <= 0) return;
+    logger.info(
+      `[Memory${this.namespace ? `:${this.namespace}` : ""}] hydrated ${loaded} key(s) from persistent index`,
+    );
   }
 }
