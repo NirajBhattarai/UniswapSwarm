@@ -219,11 +219,23 @@ async function handleCopilotRequest(request: NextRequest) {
   // @a2a-js/sdk@0.2.x and @a2a-js/sdk@0.3.x servers.
   const cardCheck = await checkAgentCards(agentUrls);
   if (!cardCheck.ok) {
+    const resolvedBases = Array.from(
+      new Set(
+        agentUrls.map((url) => {
+          try {
+            return new URL(url).origin;
+          } catch {
+            return url;
+          }
+        }),
+      ),
+    );
     return new Response(
       JSON.stringify({
         error: "A2A agent servers unreachable",
         message:
-          "One or more Uniswap Swarm A2A agent servers are not running or did not expose an agent card. Start the orchestrator (pnpm --filter @swarm/orchestrator dev) so A2A agents at http://localhost:4000/a2a/agents/* are live, then retry.",
+          "One or more Uniswap Swarm A2A agent servers are not running or did not expose an agent card. Set ORCHESTRATOR_URL (or NEXT_PUBLIC_ORCHESTRATOR_URL) to your deployed orchestrator base URL and ensure /a2a/agents/* routes are reachable.",
+        resolvedAgentBases: resolvedBases,
         details: cardCheck.failures,
       }),
       { status: 503, headers: { "Content-Type": "application/json" } },

@@ -23,9 +23,13 @@ export type SwarmAgentDescriptor = {
   badge: string;
 };
 
-// All agents now run on the same port (4000) with route-based endpoints
+// Base URL for A2A agent endpoints.
+// Server deployments (e.g. Netlify) often only set NEXT_PUBLIC_ORCHESTRATOR_URL,
+// so we fall back to it before localhost defaults.
 const ORCHESTRATOR_BASE_URL =
-  process.env.ORCHESTRATOR_URL ?? "http://localhost:4000";
+  process.env.ORCHESTRATOR_URL ??
+  process.env.NEXT_PUBLIC_ORCHESTRATOR_URL ??
+  "http://localhost:4000";
 
 export const SWARM_AGENTS: SwarmAgentDescriptor[] = [
   {
