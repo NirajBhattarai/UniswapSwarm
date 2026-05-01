@@ -21,10 +21,7 @@ import { v4 as uuidv4 } from "uuid";
 import { logger } from "@swarm/shared";
 import { LedgerLowError } from "@swarm/compute";
 import type { SwarmOrchestrator } from "./orchestrator";
-import {
-  getManagedPrivateKey,
-  isManagedWalletFunded,
-} from "./managedWallets";
+import { getManagedPrivateKey, isManagedWalletFunded } from "./managedWallets";
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import { DynamoDBDocumentClient, GetCommand } from "@aws-sdk/lib-dynamodb";
 import { ZERO_ADDRESS } from "@swarm/shared";
@@ -247,8 +244,7 @@ class SwarmAgentExecutor implements AgentExecutor {
               const item = await dynamo
                 .send(
                   new GetCommand({
-                    TableName:
-                      process.env.DYNAMODB_WALLETS_TABLE?.trim() ?? "",
+                    TableName: process.env.DYNAMODB_WALLETS_TABLE?.trim() ?? "",
                     Key: { connectedAddress: walletAddress.toLowerCase() },
                   }),
                 )

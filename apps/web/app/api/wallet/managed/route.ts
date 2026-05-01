@@ -15,8 +15,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getOrCreateManagedWallet } from "../../../../lib/dynamo-wallets";
 
-const ZG_CHAIN_RPC =
-  process.env.ZG_CHAIN_RPC ?? "https://evmrpc-testnet.0g.ai";
+const ZG_CHAIN_RPC = process.env.ZG_CHAIN_RPC ?? "https://evmrpc-testnet.0g.ai";
 const ORCHESTRATOR_URL =
   process.env.ORCHESTRATOR_URL ?? "http://localhost:4000";
 const MIN_DEPOSIT_A0GI = BigInt(10) * BigInt(10) ** BigInt(18); // 10 A0GI in wei
@@ -38,7 +37,10 @@ async function fetchA0GIBalance(address: string): Promise<bigint> {
     }),
   });
   if (!res.ok) throw new Error(`0G RPC error: HTTP ${res.status}`);
-  const data = (await res.json()) as { result?: string; error?: { message?: string } };
+  const data = (await res.json()) as {
+    result?: string;
+    error?: { message?: string };
+  };
   if (data.error) throw new Error(data.error.message ?? "RPC error");
   return BigInt(data.result ?? "0x0");
 }
@@ -86,7 +88,9 @@ export async function GET(request: NextRequest) {
     ]);
 
     const balanceWei =
-      balanceWeiResult.status === "fulfilled" ? balanceWeiResult.value : BigInt(0);
+      balanceWeiResult.status === "fulfilled"
+        ? balanceWeiResult.value
+        : BigInt(0);
     const { ledgerBalance, ledgerLow } =
       ledgerResult.status === "fulfilled"
         ? ledgerResult.value

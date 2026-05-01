@@ -1,11 +1,6 @@
 import { ZGCompute, type InferOptions } from "@swarm/compute";
 import { BlackboardMemory } from "@swarm/memory";
-import {
-  logger,
-  getConfig,
-  UNISWAP_TRADE_API_BASE_URL,
-  isStablecoin,
-} from "@swarm/shared";
+import { logger, getConfig, isStablecoin } from "@swarm/shared";
 import type {
   ResearchReport,
   TokenCandidate,
@@ -16,9 +11,6 @@ import { Impit } from "impit";
 
 import {
   ERC20_META_ABI,
-  MULTICALL3_ADDRESS,
-  MULTICALL3_ABI,
-  ERC20_BALANCE_IFACE_ABI,
   SYMBOL_TO_TOKEN,
   ADDRESS_TO_SYMBOL,
   USDC_DEF,
@@ -38,6 +30,13 @@ import {
   enrichCandidatesWithMarketData,
   filterCandidatesByLiquidity,
 } from "./formatters";
+import {
+  dedupeTokenInputs,
+  normalizeSymbol,
+  normalizeAddress,
+  isPriceValid,
+  toChecksumSafe,
+} from "./utils/index";
 import type {
   TokenDef,
   CoinGeckoMarketData,
@@ -45,8 +44,16 @@ import type {
   PriceQuoteResponse,
   PoolSnapshot,
 } from "./core";
+import { requestUniswapQuote } from "./services/uniswapQuote";
+import { fetchWalletHoldingsAlchemy as fetchWalletHoldingsAlchemyService } from "./services/walletHoldings";
 
 export type { TokenPriceResult, PriceQuoteResponse, CoinGeckoMarketData };
+
+const WALLET_HOLDINGS_MEMORY_KEY = "researcher/wallet_holdings";
+const UNISWAP_SOURCE = "uniswap" as const;
+const LIQUIDITY_TOKEN_USDC = "TOKEN/USDC";
+const LIQUIDITY_NONE = "NONE";
+const MAX_INFER_TOKENS = 4096;
 
 export class ResearchAgent {
   static readonly MEMORY_KEY = "researcher/report";
@@ -71,6 +78,56 @@ export class ResearchAgent {
   constructor(compute: ZGCompute, memory: BlackboardMemory) {
     this.compute = compute;
     this.memory = memory;
+  }
+
+  private cachePrice(cacheKey: string, result: TokenPriceResult): void {
+    this.priceCache.set(cacheKey, {
+      result,
+      expiresAt: Date.now() + this.CACHE_TTL_MS,
+    });
+  }
+
+  private buildUnresolvablePriceResult(
+    symbol: string,
+    address: string,
+  ): TokenPriceResult {
+    return {
+      symbol,
+      address,
+      price_usd: null,
+      source: UNISWAP_SOURCE,
+      liquidity_used: LIQUIDITY_NONE,
+    };
+  }
+
+  private buildResearchPromptInput(params: {
+    goal: string;
+    snapshots: PoolSnapshot[];
+    marketData: Map<string, CoinGeckoMarketData>;
+    narrativeSignal: import("./core").NarrativeSignal;
+    walletHoldings?: WalletHolding[];
+  }): string {
+    const cfg = getConfig();
+    return buildResearchPrompt({
+      goal: params.goal,
+      cfg,
+      pools: params.snapshots,
+      marketDataText: buildMarketDataText(params.marketData),
+      narrativeText: buildNarrativeText(params.narrativeSignal),
+      context: this.memory.contextFor(ResearchAgent.MEMORY_KEY),
+      ...(params.walletHoldings
+        ? { walletHoldings: params.walletHoldings }
+        : {}),
+    });
+  }
+
+  private finalizeReportMetadata(
+    report: ResearchReport,
+    walletHoldings?: WalletHolding[],
+  ): void {
+    report.timestamp = Date.now();
+    report.dataSource = "uniswap-multi-protocol";
+    if (walletHoldings) report.walletHoldings = walletHoldings;
   }
 
   private getEthProvider(): ethers.JsonRpcProvider {
@@ -104,43 +161,65 @@ export class ResearchAgent {
     let walletHoldings: WalletHolding[] | undefined;
     if (walletAddress) {
       try {
-        walletHoldings = await this.fetchWalletHoldings(walletAddress, marketData);
-        await this.memory.write("researcher/wallet_holdings", this.id, this.role, walletHoldings);
-        logger.info(`[Researcher] Wallet ${walletAddress}: ${walletHoldings.length} non-dust holding(s) found`);
+        walletHoldings = await this.fetchWalletHoldings(
+          walletAddress,
+          marketData,
+        );
+        await this.memory.write(
+          WALLET_HOLDINGS_MEMORY_KEY,
+          this.id,
+          this.role,
+          walletHoldings,
+        );
+        logger.info(
+          `[Researcher] Wallet ${walletAddress}: ${walletHoldings.length} non-dust holding(s) found`,
+        );
       } catch (err) {
-        logger.warn(`[Researcher] Could not fetch wallet holdings: ${err instanceof Error ? err.message : String(err)}`);
+        logger.warn(
+          `[Researcher] Could not fetch wallet holdings: ${err instanceof Error ? err.message : String(err)}`,
+        );
       }
     }
 
     // ── 3. LLM inference — LLM selects and ranks from the feed ────────────
     const cfg = getConfig();
-    const userPrompt = buildResearchPrompt({
+    const userPrompt = this.buildResearchPromptInput({
       goal,
-      cfg,
-      pools: snapshots,
-      marketDataText: buildMarketDataText(marketData),
-      narrativeText: buildNarrativeText(narrativeSignal),
-      context: this.memory.contextFor(ResearchAgent.MEMORY_KEY),
+      snapshots,
+      marketData,
+      narrativeSignal,
       ...(walletHoldings ? { walletHoldings } : {}),
     });
 
     const report = await this.compute.inferJSON<ResearchReport>(
       SYSTEM_PROMPT,
       userPrompt,
-      { maxTokens: 4096, ...opts },
+      { maxTokens: MAX_INFER_TOKENS, ...opts },
     );
 
-    report.timestamp = Date.now();
-    report.dataSource = "uniswap-multi-protocol";
-    if (walletHoldings) report.walletHoldings = walletHoldings;
+    this.finalizeReportMetadata(report, walletHoldings);
 
     // ── 4. Post-validate and filter ────────────────────────────────────────
     enrichCandidatesWithMarketData(report.candidates, marketData);
-    report.candidates = this.postValidateCandidates(report.candidates, snapshots, marketData);
-    report.candidates = filterCandidatesByLiquidity(report.candidates, cfg.MIN_LIQUIDITY_USD);
+    report.candidates = this.postValidateCandidates(
+      report.candidates,
+      snapshots,
+      marketData,
+    );
+    report.candidates = filterCandidatesByLiquidity(
+      report.candidates,
+      cfg.MIN_LIQUIDITY_USD,
+    );
 
-    await this.memory.write(ResearchAgent.MEMORY_KEY, this.id, this.role, report);
-    logger.info(`[Researcher] Saved ${report.candidates.length} candidates to shared memory`);
+    await this.memory.write(
+      ResearchAgent.MEMORY_KEY,
+      this.id,
+      this.role,
+      report,
+    );
+    logger.info(
+      `[Researcher] Saved ${report.candidates.length} candidates to shared memory`,
+    );
     return report;
   }
 
@@ -165,7 +244,7 @@ export class ResearchAgent {
 
     // Address map for DeFi Llama — pool tokens + full registry
     const addressBySymbol = new Map<string, string>(
-      snapshots.map((s) => [s.tokenSymbol.toUpperCase(), s.tokenAddress]),
+      snapshots.map((s) => [normalizeSymbol(s.tokenSymbol), s.tokenAddress]),
     );
     for (const [sym, def] of Object.entries(SYMBOL_TO_TOKEN)) {
       if (!addressBySymbol.has(sym)) addressBySymbol.set(sym, def.address);
@@ -175,7 +254,10 @@ export class ResearchAgent {
     const [narrativeSignal, historicalChanges, marketData] = await Promise.all([
       fetchNarrativeSignal(this.browser, trendingSymbols),
       fetchDefiLlamaHistoricalChanges(addressBySymbol),
-      fetchCoinGeckoMarketDataService(Object.keys(SYMBOL_TO_TOKEN), trendingCoinGeckoIds),
+      fetchCoinGeckoMarketDataService(
+        Object.keys(SYMBOL_TO_TOKEN),
+        trendingCoinGeckoIds,
+      ),
     ]);
 
     // Merge 7d/30d historical price changes into market data
@@ -192,7 +274,9 @@ export class ResearchAgent {
 
     // Synthetic snapshots: registered tokens with CoinGecko market data but no
     // classic Uniswap pool — use 0.5% of market cap as a conservative liquidity proxy
-    const pooledSymbols = new Set(snapshots.map((s) => s.tokenSymbol.toUpperCase()));
+    const pooledSymbols = new Set(
+      snapshots.map((s) => normalizeSymbol(s.tokenSymbol)),
+    );
     for (const [sym, def] of Object.entries(SYMBOL_TO_TOKEN)) {
       if (pooledSymbols.has(sym)) continue;
       if (isStablecoin({ symbol: sym, address: def.address })) continue;
@@ -228,335 +312,24 @@ export class ResearchAgent {
   }
 
   /**
-   * Dispatches to the Alchemy path if `ALCHEMY_API_KEY` is configured, otherwise
-   * falls back to Multicall3. Alchemy is preferred because it auto-discovers every
-   * ERC-20 the wallet holds — not just the tokens in the hardcoded registry.
+   * Wallet holdings are Alchemy-only so we can discover all ERC-20 balances,
+   * including tokens outside the local registry.
    */
   private async fetchWalletHoldings(
     walletAddress: string,
     marketData: Map<string, CoinGeckoMarketData>,
   ): Promise<WalletHolding[]> {
     const { ALCHEMY_API_KEY } = getConfig();
-    if (ALCHEMY_API_KEY) {
-      return this.fetchWalletHoldingsAlchemy(
-        walletAddress,
-        marketData,
-        ALCHEMY_API_KEY,
+    if (!ALCHEMY_API_KEY) {
+      throw new Error(
+        "[Researcher] ALCHEMY_API_KEY is required for wallet holdings fetch",
       );
     }
-    return this.fetchWalletHoldingsMulticall(walletAddress, marketData);
-  }
-
-  /**
-   * Alchemy path — two HTTP round-trips maximum:
-   *  1. Batch `[eth_getBalance, alchemy_getTokenBalances("erc20")]` → all non-zero balances
-   *  2. Batch `alchemy_getTokenMetadata` for any tokens not in the local registry
-   *
-   * This discovers ALL ERC-20 tokens the wallet holds, including ones absent from
-   * the hardcoded SYMBOL_TO_TOKEN list.
-   */
-  private async fetchWalletHoldingsAlchemy(
-    walletAddress: string,
-    marketData: Map<string, CoinGeckoMarketData>,
-    alchemyKey: string,
-  ): Promise<WalletHolding[]> {
-    const rpcUrl = `https://eth-mainnet.g.alchemy.com/v2/${alchemyKey}`;
-
-    // ── Round-trip 1: ETH balance + all ERC-20 balances ─────────────────────
-    const batchBody = [
-      {
-        jsonrpc: "2.0",
-        id: 1,
-        method: "eth_getBalance",
-        params: [walletAddress, "latest"],
-      },
-      {
-        jsonrpc: "2.0",
-        id: 2,
-        method: "alchemy_getTokenBalances",
-        params: [walletAddress, "erc20"],
-      },
-    ];
-
-    const batchResp = await fetch(rpcUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(batchBody),
-    });
-    if (!batchResp.ok) {
-      throw new Error(`Alchemy batch RPC failed: HTTP ${batchResp.status}`);
-    }
-
-    const batchData = (await batchResp.json()) as Array<{
-      id: number;
-      result?: unknown;
-      error?: { message: string };
-    }>;
-
-    const ethHex = batchData.find((r) => r.id === 1)?.result as
-      | string
-      | undefined;
-    const tokenBalancesResult = batchData.find((r) => r.id === 2)?.result as
-      | {
-          tokenBalances: Array<{
-            contractAddress: string;
-            tokenBalance: string | null;
-          }>;
-        }
-      | undefined;
-
-    const holdings: WalletHolding[] = [];
-
-    // ── Native ETH ───────────────────────────────────────────────────────────
-    if (ethHex) {
-      const ethFormatted = parseFloat(ethers.formatEther(BigInt(ethHex)));
-      const ethPrice =
-        marketData.get("WETH")?.price_usd ??
-        marketData.get("ETH")?.price_usd ??
-        0;
-      if (ethFormatted > 0.0001) {
-        holdings.push({
-          symbol: "ETH",
-          address: "ETH",
-          decimals: 18,
-          balanceFormatted: ethFormatted,
-          priceUSD: ethPrice,
-          valueUSD: ethFormatted * ethPrice,
-        });
-      }
-    }
-
-    // ── ERC-20 tokens ────────────────────────────────────────────────────────
-    // Filter out zero balances (Alchemy returns all known tokens, even empty ones)
-    const ZERO_BALANCE =
-      "0x0000000000000000000000000000000000000000000000000000000000000000";
-    const nonZero = (tokenBalancesResult?.tokenBalances ?? []).filter(
-      (t) => t.tokenBalance && t.tokenBalance !== ZERO_BALANCE,
-    );
-
-    // Build address→{symbol,decimals} lookup from local registry (fast path)
-    const addrToKnown = new Map<string, { symbol: string; decimals: number }>();
-    for (const [sym, def] of Object.entries(SYMBOL_TO_TOKEN)) {
-      addrToKnown.set(def.address.toLowerCase(), {
-        symbol: sym,
-        decimals: def.decimals,
-      });
-    }
-
-    type TokenEntry = {
-      contractAddress: string;
-      tokenBalance: string;
-      symbol: string;
-      decimals: number;
-    };
-
-    const knownEntries: TokenEntry[] = [];
-    const unknownAddresses: string[] = [];
-
-    for (const t of nonZero) {
-      const known = addrToKnown.get(t.contractAddress.toLowerCase());
-      if (known) {
-        knownEntries.push({
-          contractAddress: t.contractAddress,
-          tokenBalance: t.tokenBalance!,
-          symbol: known.symbol,
-          decimals: known.decimals,
-        });
-      } else {
-        unknownAddresses.push(t.contractAddress);
-      }
-    }
-
-    // ── Round-trip 2 (optional): metadata for tokens not in local registry ───
-    const metaMap = new Map<string, { symbol: string; decimals: number }>();
-    if (unknownAddresses.length > 0) {
-      const metaBatch = unknownAddresses.map((addr, i) => ({
-        jsonrpc: "2.0",
-        id: i + 1,
-        method: "alchemy_getTokenMetadata",
-        params: [addr],
-      }));
-      const metaResp = await fetch(rpcUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(metaBatch),
-      });
-      if (metaResp.ok) {
-        const metaData = (await metaResp.json()) as Array<{
-          id: number;
-          result?: { symbol?: string | null; decimals?: number | null };
-        }>;
-        for (let i = 0; i < unknownAddresses.length; i++) {
-          const meta = metaData.find((m) => m.id === i + 1)?.result;
-          if (meta?.symbol && meta?.decimals != null) {
-            metaMap.set(unknownAddresses[i]!.toLowerCase(), {
-              symbol: meta.symbol.toUpperCase(),
-              decimals: meta.decimals,
-            });
-          }
-        }
-      }
-    }
-
-    // Merge unknown tokens that now have metadata
-    const unknownNonZero = nonZero.filter((t) =>
-      unknownAddresses.includes(t.contractAddress),
-    );
-    const unknownEntries: TokenEntry[] = unknownNonZero.flatMap((t) => {
-      const meta = metaMap.get(t.contractAddress.toLowerCase());
-      return meta
-        ? [
-            {
-              contractAddress: t.contractAddress,
-              tokenBalance: t.tokenBalance!,
-              symbol: meta.symbol,
-              decimals: meta.decimals,
-            },
-          ]
-        : [];
-    });
-
-    // ── Price and build holdings ─────────────────────────────────────────────
-    for (const token of [...knownEntries, ...unknownEntries]) {
-      const raw = BigInt(token.tokenBalance);
-      const formatted = parseFloat(ethers.formatUnits(raw, token.decimals));
-      if (formatted <= 0.000001) continue;
-
-      const price = marketData.get(token.symbol)?.price_usd ?? 0;
-      holdings.push({
-        symbol: token.symbol,
-        address: this.toChecksumSafe(token.contractAddress),
-        decimals: token.decimals,
-        balanceFormatted: formatted,
-        priceUSD: price,
-        valueUSD: formatted * price,
-      });
-    }
-
-    return holdings
-      .filter((h) => h.valueUSD > 0.01)
-      .sort((a, b) => b.valueUSD - a.valueUSD);
-  }
-
-  /**
-   * Multicall3 fallback — used when no `ALCHEMY_API_KEY` is set.
-   * Fetches all known ERC-20 token balances + native ETH balance for a wallet
-   * using a single Multicall3 `aggregate3` call — one RPC round-trip instead of N+1.
-   *
-   * Multicall3 is deployed at `0xcA11bde05977b3631167028862bE2a173976CA11` on
-   * Ethereum mainnet and 250+ other chains. All results come from the same block,
-   * giving a consistent atomic snapshot of the wallet.
-   *
-   * Limitation: only checks tokens in the hardcoded SYMBOL_TO_TOKEN registry.
-   */
-  private async fetchWalletHoldingsMulticall(
-    walletAddress: string,
-    marketData: Map<string, CoinGeckoMarketData>,
-  ): Promise<WalletHolding[]> {
-    const provider = this.getEthProvider();
-
-    // All tokens in the known registry (ETH native handled separately via Multicall3)
-    const tokenEntries = Object.entries(SYMBOL_TO_TOKEN).filter(
-      ([sym]) => sym !== "ETH", // ETH is native — queried via getEthBalance on Multicall3
-    );
-
-    // Interface used only for encoding / decoding balanceOf calldata
-    const erc20Iface = new ethers.Interface(ERC20_BALANCE_IFACE_ABI);
-    const mc3Iface = new ethers.Interface(MULTICALL3_ABI);
-
-    // ── Build all calls ──────────────────────────────────────────────────────
-    // Call 0: getEthBalance(walletAddress) on the Multicall3 contract itself
-    const ethBalanceCalldata = mc3Iface.encodeFunctionData("getEthBalance", [
+    return fetchWalletHoldingsAlchemyService({
       walletAddress,
-    ]);
-
-    // Calls 1…N: balanceOf(walletAddress) for each known ERC-20
-    const erc20Calls = tokenEntries.map(([, def]) => ({
-      target: def.address,
-      allowFailure: true,
-      callData: erc20Iface.encodeFunctionData("balanceOf", [walletAddress]),
-    }));
-
-    const allCalls = [
-      {
-        target: MULTICALL3_ADDRESS,
-        allowFailure: true,
-        callData: ethBalanceCalldata,
-      },
-      ...erc20Calls,
-    ];
-
-    // ── Single RPC call ──────────────────────────────────────────────────────
-    const multicall = new ethers.Contract(
-      MULTICALL3_ADDRESS,
-      MULTICALL3_ABI,
-      provider,
-    );
-    const results = (await multicall.getFunction("aggregate3")(
-      allCalls,
-    )) as Array<{
-      success: boolean;
-      returnData: string;
-    }>;
-
-    const holdings: WalletHolding[] = [];
-
-    // ── Decode ETH balance (result[0]) ───────────────────────────────────────
-    const ethResult = results[0];
-    if (ethResult?.success && ethResult.returnData !== "0x") {
-      const [ethRaw] = mc3Iface.decodeFunctionResult(
-        "getEthBalance",
-        ethResult.returnData,
-      ) as unknown as [bigint];
-      const ethFormatted = parseFloat(ethers.formatEther(ethRaw));
-      const ethPrice =
-        marketData.get("WETH")?.price_usd ??
-        marketData.get("ETH")?.price_usd ??
-        0;
-      if (ethFormatted > 0.0001) {
-        holdings.push({
-          symbol: "ETH",
-          address: "ETH",
-          decimals: 18,
-          balanceFormatted: ethFormatted,
-          priceUSD: ethPrice,
-          valueUSD: ethFormatted * ethPrice,
-        });
-      }
-    }
-
-    // ── Decode ERC-20 balances (results[1…N]) ────────────────────────────────
-    for (let i = 0; i < tokenEntries.length; i++) {
-      const result = results[i + 1];
-      if (!result?.success || result.returnData === "0x") continue;
-
-      const [sym, def] = tokenEntries[i]!;
-      try {
-        const [raw] = erc20Iface.decodeFunctionResult(
-          "balanceOf",
-          result.returnData,
-        ) as unknown as [bigint];
-        const formatted = parseFloat(ethers.formatUnits(raw, def.decimals));
-        if (formatted <= 0.000001) continue;
-
-        const price = marketData.get(sym)?.price_usd ?? 0;
-        holdings.push({
-          symbol: sym,
-          address: this.toChecksumSafe(def.address),
-          decimals: def.decimals,
-          balanceFormatted: formatted,
-          priceUSD: price,
-          valueUSD: formatted * price,
-        });
-      } catch {
-        // Failed decode for one token — skip it, others are unaffected
-      }
-    }
-
-    // Sort by USD value descending; filter dust < $0.01
-    return holdings
-      .filter((h) => h.valueUSD > 0.01)
-      .sort((a, b) => b.valueUSD - a.valueUSD);
+      marketData,
+      alchemyKey: ALCHEMY_API_KEY,
+    });
   }
 
   /**
@@ -571,7 +344,7 @@ export class ResearchAgent {
     const bestPoolBySymbol = new Map<string, PoolSnapshot>();
 
     for (const pool of pools) {
-      const symbol = pool.tokenSymbol.toUpperCase();
+      const symbol = normalizeSymbol(pool.tokenSymbol);
       const existing = bestPoolBySymbol.get(symbol);
       if (!existing || pool.liquidityUSD > existing.liquidityUSD) {
         bestPoolBySymbol.set(symbol, pool);
@@ -583,7 +356,7 @@ export class ResearchAgent {
     let dropped = 0;
 
     for (const c of candidates) {
-      const symbol = c.symbol.toUpperCase();
+      const symbol = normalizeSymbol(c.symbol);
 
       // Deduplicate — keep only the first occurrence of each symbol
       if (seenSymbols.has(symbol)) {
@@ -601,14 +374,14 @@ export class ResearchAgent {
 
       const canonicalAddress =
         SYMBOL_TO_TOKEN[symbol]?.address ?? pool.tokenAddress;
-      const checksummedAddress = this.toChecksumSafe(canonicalAddress);
+      const checksummedAddress = toChecksumSafe(canonicalAddress);
 
       const fixed: TokenCandidate = {
         ...c,
         symbol,
         address: checksummedAddress,
         name: pool.tokenName || c.name || symbol,
-        pairAddress: this.toChecksumSafe(pool.poolAddress),
+        pairAddress: toChecksumSafe(pool.poolAddress),
         baseToken: pool.baseTokenSymbol,
         poolFeeTier: pool.feePct,
         liquidityUSD: pool.liquidityUSD,
@@ -638,14 +411,6 @@ export class ResearchAgent {
     return validated;
   }
 
-  private toChecksumSafe(address: string): string {
-    try {
-      return ethers.getAddress(address);
-    } catch {
-      return address;
-    }
-  }
-
   // ── Public: fetch real-time USD prices from Uniswap on-chain data ─────────────
   // Input:  { tokens: ["ETH", "USDC", "WBTC"] }  (symbols or addresses)
   // Output: { data: TokenPriceResult[] }
@@ -654,15 +419,7 @@ export class ResearchAgent {
     const provider = this.getEthProvider();
 
     // Deduplicate while preserving input order
-    const seen = new Set<string>();
-    const ordered: string[] = [];
-    for (const t of tokens) {
-      const key = t.trim();
-      if (key && !seen.has(key)) {
-        seen.add(key);
-        ordered.push(key);
-      }
-    }
+    const ordered = dedupeTokenInputs(tokens);
 
     // Fetch prices + CoinGecko market data in parallel
     const [results, marketData] = await Promise.all([
@@ -703,7 +460,7 @@ export class ResearchAgent {
     input: string,
     provider: ethers.JsonRpcProvider,
   ): Promise<TokenPriceResult> {
-    const upperSymbol = input.toUpperCase();
+    const upperSymbol = normalizeSymbol(input);
     const isAddress = /^0x[0-9a-fA-F]{40}$/.test(input);
 
     // ── Determine token definition ─────────────────────────────────────────────
@@ -711,7 +468,7 @@ export class ResearchAgent {
     let canonicalSymbol: string;
 
     if (isAddress) {
-      const addressKey = input.toLowerCase();
+      const addressKey = normalizeAddress(input);
       const knownSymbol = ADDRESS_TO_SYMBOL[addressKey];
       if (knownSymbol) {
         canonicalSymbol = knownSymbol;
@@ -730,13 +487,7 @@ export class ResearchAgent {
             decimals: Number(decimals),
           };
         } catch {
-          return {
-            symbol: input,
-            address: input,
-            price_usd: null,
-            source: "uniswap",
-            liquidity_used: "NONE",
-          };
+          return this.buildUnresolvablePriceResult(input, input);
         }
       }
     } else {
@@ -744,25 +495,13 @@ export class ResearchAgent {
       tokenDef = SYMBOL_TO_TOKEN[upperSymbol] as TokenDef | undefined;
       if (!tokenDef) {
         logger.warn(`[Researcher] Unknown token symbol: ${input}`);
-        return {
-          symbol: input,
-          address: "0x",
-          price_usd: null,
-          source: "uniswap",
-          liquidity_used: "NONE",
-        };
+        return this.buildUnresolvablePriceResult(input, "0x");
       }
     }
 
     // Guard: tokenDef must be defined by this point (all undefined paths return early above)
     if (!tokenDef) {
-      return {
-        symbol: input,
-        address: "0x",
-        price_usd: null,
-        source: "uniswap",
-        liquidity_used: "NONE",
-      };
+      return this.buildUnresolvablePriceResult(input, "0x");
     }
 
     // ── Cache check ───────────────────────────────────────────────────────────
@@ -779,13 +518,10 @@ export class ResearchAgent {
         symbol: canonicalSymbol,
         address: tokenDef.address,
         price_usd: 1.0,
-        source: "uniswap",
-        liquidity_used: "TOKEN/USDC",
+        source: UNISWAP_SOURCE,
+        liquidity_used: LIQUIDITY_TOKEN_USDC,
       };
-      this.priceCache.set(cacheKey, {
-        result,
-        expiresAt: Date.now() + this.CACHE_TTL_MS,
-      });
+      this.cachePrice(cacheKey, result);
       return result;
     }
 
@@ -796,25 +532,15 @@ export class ResearchAgent {
         symbol: canonicalSymbol,
         address: tokenDef.address,
         price_usd: apiPrice,
-        source: "uniswap",
-        liquidity_used: "TOKEN/USDC",
+        source: UNISWAP_SOURCE,
+        liquidity_used: LIQUIDITY_TOKEN_USDC,
       };
-      this.priceCache.set(cacheKey, {
-        result,
-        expiresAt: Date.now() + this.CACHE_TTL_MS,
-      });
+      this.cachePrice(cacheKey, result);
       return result;
     }
 
     // ── Unresolvable ──────────────────────────────────────────────────────────
-    const failed: TokenPriceResult = {
-      symbol: canonicalSymbol,
-      address: tokenDef.address,
-      price_usd: null,
-      source: "uniswap",
-      liquidity_used: "NONE",
-    };
-    return failed;
+    return this.buildUnresolvablePriceResult(canonicalSymbol, tokenDef.address);
   }
 
   // ── Uniswap Trading API pricing ───────────────────────────────────────────
@@ -837,14 +563,9 @@ export class ResearchAgent {
     const amountIn = (BigInt(10) ** BigInt(token.decimals)).toString(); // 1 full token
 
     try {
-      const response = await fetch(`${UNISWAP_TRADE_API_BASE_URL}/quote`, {
-        method: "POST",
-        headers: {
-          "x-api-key": UNISWAP_API_KEY,
-          "Content-Type": "application/json",
-          Accept: "application/json",
-        },
-        body: JSON.stringify({
+      const response = await requestUniswapQuote({
+        apiKey: UNISWAP_API_KEY,
+        body: {
           tokenIn: tokenInAddress,
           tokenOut: USDC_DEF.address,
           amount: amountIn,
@@ -853,7 +574,7 @@ export class ResearchAgent {
           tokenOutChainId: 1,
           // A non-zero placeholder — required by the API but not used for simulation
           swapper: "0x0000000000000000000000000000000000000001",
-        }),
+        },
       });
 
       if (!response.ok) {
@@ -874,7 +595,7 @@ export class ResearchAgent {
       )?.["amount"];
       if (typeof classicOutput === "string") {
         const price = Number(classicOutput) / 10 ** USDC_DEF.decimals;
-        if (this.isPriceValid(price, token)) {
+        if (isPriceValid(price, token)) {
           logger.debug(
             `[Researcher] Trade API (CLASSIC) ${symbol} → USDC: $${price}`,
           );
@@ -892,7 +613,7 @@ export class ResearchAgent {
         const startAmt = firstOut["startAmount"];
         if (typeof startAmt === "string") {
           const price = Number(startAmt) / 10 ** USDC_DEF.decimals;
-          if (this.isPriceValid(price, token)) {
+          if (isPriceValid(price, token)) {
             logger.debug(
               `[Researcher] Trade API (UniswapX) ${symbol} → USDC: $${price}`,
             );
@@ -911,17 +632,5 @@ export class ResearchAgent {
       );
       return null;
     }
-  }
-
-  // ── Price validation ────────────────────────────────────────────────────────
-  // Stablecoins: must be within ±2% of $1. Others: reject ≤0 or obviously absurd.
-
-  private isPriceValid(price: number, token: TokenDef): boolean {
-    if (!isFinite(price) || price <= 0) return false;
-    if (token.isStablecoin) {
-      return Math.abs(price - 1.0) <= 0.02; // ±2 % band
-    }
-    // Reject implausibly small (<$0.000001) or large (>$10M) prices
-    return price >= 1e-6 && price <= 10_000_000;
   }
 }

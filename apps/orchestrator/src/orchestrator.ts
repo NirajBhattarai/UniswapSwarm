@@ -79,10 +79,7 @@ export class SwarmOrchestrator {
   ): SessionContext {
     const compute = computeOverride ?? this.compute;
     const storage = storageOverride ?? this.zgStorage;
-    const memory = new BlackboardMemory(
-      storage,
-      `sessions/${sessionId}`,
-    );
+    const memory = new BlackboardMemory(storage, `sessions/${sessionId}`);
     return {
       memory,
       planner: new PlannerAgent(compute, memory),

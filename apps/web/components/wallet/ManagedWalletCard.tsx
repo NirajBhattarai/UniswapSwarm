@@ -179,142 +179,149 @@ export const ManagedWalletCard: React.FC<Props> = ({ connectedAddress }) => {
 
       {expanded && (
         <>
-      {/* Managed address */}
-      <div className="mt-2 flex items-center gap-1.5 font-mono">
-        <span className={isGreen ? "text-emerald-900" : "text-orange-900"}>
-          {shortAddress(data.managedAddress)}
-        </span>
-        <button
-          type="button"
-          onClick={copyAddress}
-          title="Copy full address"
-          className={`rounded px-1 py-0.5 text-[10px] transition-colors ${
-            isGreen
-              ? "bg-emerald-100 text-emerald-700 hover:bg-emerald-200"
-              : "bg-orange-100 text-orange-700 hover:bg-orange-200"
-          }`}
-        >
-          {copied ? "✓ Copied" : "Copy"}
-        </button>
-      </div>
-
-      {/* A0GI wallet balance */}
-      <div className={`mt-1 ${isGreen ? "text-emerald-700" : "text-orange-700"}`}>
-        Wallet: <span className="font-semibold">{data.balance0g} A0GI</span>
-      </div>
-
-      {/* 0G Compute ledger balance + Fund Ledger button */}
-      {data.ledgerBalance !== null && (
-        <div className="mt-0.5 flex items-center justify-between gap-2">
-          <div className={data.ledgerLow ? "text-orange-700" : "text-emerald-700"}>
-            Compute ledger:{" "}
-            <span className="font-semibold">
-              {data.ledgerBalance.toFixed(4)} OG
+          {/* Managed address */}
+          <div className="mt-2 flex items-center gap-1.5 font-mono">
+            <span className={isGreen ? "text-emerald-900" : "text-orange-900"}>
+              {shortAddress(data.managedAddress)}
             </span>
-            {data.ledgerLow && (
-              <span className="ml-1 font-semibold text-orange-600">⚠ low</span>
-            )}
-          </div>
-          {/* Only show Fund Ledger when the managed wallet actually has A0GI to spend */}
-          {data.hasMinDeposit && (
             <button
               type="button"
-              onClick={() => {
-                setFundOpen((v) => !v);
-                setFundError(null);
-                setFundSuccess(null);
-              }}
-              className="rounded px-1.5 py-0.5 text-[10px] font-semibold transition-colors bg-sky-100 text-sky-700 hover:bg-sky-200"
+              onClick={copyAddress}
+              title="Copy full address"
+              className={`rounded px-1 py-0.5 text-[10px] transition-colors ${
+                isGreen
+                  ? "bg-emerald-100 text-emerald-700 hover:bg-emerald-200"
+                  : "bg-orange-100 text-orange-700 hover:bg-orange-200"
+              }`}
             >
-              + Fund Ledger
+              {copied ? "✓ Copied" : "Copy"}
             </button>
+          </div>
+
+          {/* A0GI wallet balance */}
+          <div
+            className={`mt-1 ${isGreen ? "text-emerald-700" : "text-orange-700"}`}
+          >
+            Wallet: <span className="font-semibold">{data.balance0g} A0GI</span>
+          </div>
+
+          {/* 0G Compute ledger balance + Fund Ledger button */}
+          {data.ledgerBalance !== null && (
+            <div className="mt-0.5 flex items-center justify-between gap-2">
+              <div
+                className={
+                  data.ledgerLow ? "text-orange-700" : "text-emerald-700"
+                }
+              >
+                Compute ledger:{" "}
+                <span className="font-semibold">
+                  {data.ledgerBalance.toFixed(4)} OG
+                </span>
+                {data.ledgerLow && (
+                  <span className="ml-1 font-semibold text-orange-600">
+                    ⚠ low
+                  </span>
+                )}
+              </div>
+              {/* Only show Fund Ledger when the managed wallet actually has A0GI to spend */}
+              {data.hasMinDeposit && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setFundOpen((v) => !v);
+                    setFundError(null);
+                    setFundSuccess(null);
+                  }}
+                  className="rounded px-1.5 py-0.5 text-[10px] font-semibold transition-colors bg-sky-100 text-sky-700 hover:bg-sky-200"
+                >
+                  + Fund Ledger
+                </button>
+              )}
+            </div>
           )}
-        </div>
-      )}
 
-      {/* Ledger balance not yet loaded but wallet is funded — still show the button */}
-      {data.ledgerBalance === null && data.hasMinDeposit && (
-        <div className="mt-1 flex justify-end">
-          <button
-            type="button"
-            onClick={() => {
-              setFundOpen((v) => !v);
-              setFundError(null);
-              setFundSuccess(null);
-            }}
-            className="rounded px-1.5 py-0.5 text-[10px] font-semibold transition-colors bg-sky-100 text-sky-700 hover:bg-sky-200"
-          >
-            + Fund Ledger
-          </button>
-        </div>
-      )}
+          {/* Ledger balance not yet loaded but wallet is funded — still show the button */}
+          {data.ledgerBalance === null && data.hasMinDeposit && (
+            <div className="mt-1 flex justify-end">
+              <button
+                type="button"
+                onClick={() => {
+                  setFundOpen((v) => !v);
+                  setFundError(null);
+                  setFundSuccess(null);
+                }}
+                className="rounded px-1.5 py-0.5 text-[10px] font-semibold transition-colors bg-sky-100 text-sky-700 hover:bg-sky-200"
+              >
+                + Fund Ledger
+              </button>
+            </div>
+          )}
 
-      {/* Inline fund ledger form */}
-      {fundOpen && (
-        <div className="mt-2 flex items-center gap-1.5 rounded-lg border border-sky-200 bg-sky-50 px-2 py-1.5">
-          <label className="text-[10px] font-semibold text-sky-700 whitespace-nowrap">
-            OG amount:
-          </label>
-          <input
-            type="number"
-            min="0.1"
-            step="1"
-            value={fundAmount}
-            onChange={(e) => setFundAmount(e.target.value)}
-            disabled={funding}
-            className="w-16 rounded border border-sky-200 bg-white px-1 py-0.5 text-[11px] text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-400 disabled:opacity-50"
-          />
-          <button
-            type="button"
-            onClick={() => void handleFundLedger()}
-            disabled={funding}
-            className="rounded bg-sky-600 px-2 py-0.5 text-[10px] font-semibold text-white hover:bg-sky-700 disabled:opacity-50"
-          >
-            {funding ? "Funding…" : "Confirm"}
-          </button>
-          <button
-            type="button"
-            onClick={() => setFundOpen(false)}
-            disabled={funding}
-            className="rounded px-1 py-0.5 text-[10px] text-sky-600 hover:text-sky-800 disabled:opacity-50"
-          >
-            Cancel
-          </button>
-        </div>
-      )}
+          {/* Inline fund ledger form */}
+          {fundOpen && (
+            <div className="mt-2 flex items-center gap-1.5 rounded-lg border border-sky-200 bg-sky-50 px-2 py-1.5">
+              <label className="text-[10px] font-semibold text-sky-700 whitespace-nowrap">
+                OG amount:
+              </label>
+              <input
+                type="number"
+                min="0.1"
+                step="1"
+                value={fundAmount}
+                onChange={(e) => setFundAmount(e.target.value)}
+                disabled={funding}
+                className="w-16 rounded border border-sky-200 bg-white px-1 py-0.5 text-[11px] text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-400 disabled:opacity-50"
+              />
+              <button
+                type="button"
+                onClick={() => void handleFundLedger()}
+                disabled={funding}
+                className="rounded bg-sky-600 px-2 py-0.5 text-[10px] font-semibold text-white hover:bg-sky-700 disabled:opacity-50"
+              >
+                {funding ? "Funding…" : "Confirm"}
+              </button>
+              <button
+                type="button"
+                onClick={() => setFundOpen(false)}
+                disabled={funding}
+                className="rounded px-1 py-0.5 text-[10px] text-sky-600 hover:text-sky-800 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+            </div>
+          )}
 
-      {/* Fund success message */}
-      {fundSuccess && (
-        <p className="mt-1 text-[10px] font-semibold text-emerald-700">
-          ✓ {fundSuccess}
-        </p>
-      )}
+          {/* Fund success message */}
+          {fundSuccess && (
+            <p className="mt-1 text-[10px] font-semibold text-emerald-700">
+              ✓ {fundSuccess}
+            </p>
+          )}
 
-      {/* Fund error message */}
-      {fundError && (
-        <p className="mt-1 text-[10px] text-rose-600">{fundError}</p>
-      )}
+          {/* Fund error message */}
+          {fundError && (
+            <p className="mt-1 text-[10px] text-rose-600">{fundError}</p>
+          )}
 
-      {/* Deposit A0GI prompt */}
-      {!data.hasMinDeposit && (
-        <p className="mt-2 leading-relaxed text-orange-700">
-          Send <span className="font-semibold">≥10 A0GI</span> to the address
-          above on the 0G testnet to activate automated trades. Then click{" "}
-          <span className="font-semibold">↻ Refresh</span>.
-        </p>
-      )}
+          {/* Deposit A0GI prompt */}
+          {!data.hasMinDeposit && (
+            <p className="mt-2 leading-relaxed text-orange-700">
+              Send <span className="font-semibold">≥10 A0GI</span> to the
+              address above on the 0G testnet to activate automated trades. Then
+              click <span className="font-semibold">↻ Refresh</span>.
+            </p>
+          )}
 
-      {/* Ledger topup prompt */}
-      {data.hasMinDeposit && data.ledgerLow && (
-        <p className="mt-2 leading-relaxed text-orange-700">
-          Your 0G Compute ledger is low ({"<"}3 OG). Use the{" "}
-          <span className="font-semibold">+ Fund Ledger</span> button above to
-          deposit OG from your managed wallet into the compute ledger.
-        </p>
-      )}
+          {/* Ledger topup prompt */}
+          {data.hasMinDeposit && data.ledgerLow && (
+            <p className="mt-2 leading-relaxed text-orange-700">
+              Your 0G Compute ledger is low ({"<"}3 OG). Use the{" "}
+              <span className="font-semibold">+ Fund Ledger</span> button above
+              to deposit OG from your managed wallet into the compute ledger.
+            </p>
+          )}
         </>
       )}
     </div>
   );
 };
-

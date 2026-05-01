@@ -1,7 +1,9 @@
-import { COINGECKO_API_BASE_URL, getConfig, logger } from "@swarm/shared";
+import { COINGECKO_API_BASE_URL, logger } from "@swarm/shared";
 
 import { WETH_DEF } from "../core/constants";
 import type { QueryPair } from "../core/types";
+import { normalizeSymbol } from "../utils";
+import { buildCoinGeckoRequest } from "./coinGeckoClient";
 
 interface TrendingCoinItem {
   id: string;
@@ -45,9 +47,8 @@ export async function fetchTrendingTokens(): Promise<TrendingResult> {
     coinGeckoIds: new Map(),
     trendingSymbols: [],
   };
-  const { COINGECKO_API_KEY } = getConfig();
-
-  if (!COINGECKO_API_KEY) {
+  const { hasApiKey, headers } = buildCoinGeckoRequest();
+  if (!hasApiKey) {
     logger.debug(
       "[Researcher] No COINGECKO_API_KEY — skipping trending-token pair discovery",
     );
@@ -57,10 +58,7 @@ export async function fetchTrendingTokens(): Promise<TrendingResult> {
   try {
     const url = `${COINGECKO_API_BASE_URL}/search/trending`;
     const res = await fetch(url, {
-      headers: {
-        Accept: "application/json",
-        "x-cg-demo-api-key": COINGECKO_API_KEY,
-      },
+      headers,
     });
 
     if (!res.ok) {
@@ -71,7 +69,7 @@ export async function fetchTrendingTokens(): Promise<TrendingResult> {
     const json = (await res.json()) as CoinGeckoTrendingResponse;
     const coins = json.coins ?? [];
     const trendingSymbols = coins
-      .map((c) => c.item.symbol.toUpperCase())
+      .map((c) => normalizeSymbol(c.item.symbol))
       .slice(0, 7);
 
     const pairs: QueryPair[] = [];
@@ -98,7 +96,7 @@ export async function fetchTrendingTokens(): Promise<TrendingResult> {
       // Skip if this is WETH itself
       if (ethAddress.toLowerCase() === WETH_DEF.address.toLowerCase()) continue;
 
-      const symbol = item.symbol.toUpperCase();
+      const symbol = normalizeSymbol(item.symbol);
 
       // Resolve decimals: prefer CoinGecko's detail_platforms value, fall back
       // to 18 only when the field is absent/null (most ERC-20s are 18-decimal).
@@ -158,9 +156,4 @@ export async function fetchTrendingTokens(): Promise<TrendingResult> {
     );
     return empty;
   }
-}
-
-/** @deprecated Use fetchTrendingTokens() instead */
-export async function fetchTrendingPairs(): Promise<QueryPair[]> {
-  return (await fetchTrendingTokens()).pairs;
 }

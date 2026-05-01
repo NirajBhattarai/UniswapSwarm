@@ -1,4 +1,4 @@
-import { UNISWAP_TRADE_API_BASE_URL, getConfig, logger } from "@swarm/shared";
+import { getConfig, logger } from "@swarm/shared";
 
 import {
   QUERY_PAIRS,
@@ -12,7 +12,9 @@ import type {
   QueryPair,
   UniswapAPIQuoteResponse,
 } from "../core/types";
+import { normalizeSymbol } from "../utils";
 import { fetchTrendingTokens } from "./trendingPairs";
+import { parseUniswapQuoteResponse, requestUniswapQuote } from "./uniswapQuote";
 
 const BASE_SYMBOLS = new Set(["WETH", "USDC", "USDT", "DAI"]);
 const STABLE_SYMBOLS = new Set(["USDC", "USDT", "DAI"]);
@@ -78,7 +80,9 @@ export async function fetchOnChainPools(): Promise<OnChainPoolsResult> {
   ]);
 
   // Symbols already covered so we can deduplicate
-  const existingSymbols = new Set(snapshots.map((s) => s.tokenSymbol));
+  const existingSymbols = new Set(
+    snapshots.map((s) => normalizeSymbol(s.tokenSymbol)),
+  );
 
   // Add extra tokens from registry not yet covered
   const narrativePairs = buildNarrativeExtraPairs(existingSymbols);
@@ -206,15 +210,10 @@ async function fetchUniswapQuoteForPair(
   pair: QueryPair,
   uniswapApiKey: string,
 ): Promise<UniswapAPIQuoteResponse | null> {
-  const res = await fetch(`${UNISWAP_TRADE_API_BASE_URL}/quote`, {
-    method: "POST",
-    headers: {
-      "x-api-key": uniswapApiKey,
-      "x-universal-router-version": "2.0",
-      "Content-Type": "application/json",
-      Accept: "application/json",
-    },
-    body: JSON.stringify({
+  const res = await requestUniswapQuote({
+    apiKey: uniswapApiKey,
+    universalRouterVersion: "2.0",
+    body: {
       tokenIn: pair.tokenIn.address,
       tokenOut: pair.tokenOut.address,
       // tokenInChainId / tokenOutChainId MUST be strings per the Trading API spec.
@@ -225,7 +224,7 @@ async function fetchUniswapQuoteForPair(
       swapper: QUOTE_SWAPPER_ADDRESS,
       slippageTolerance: 0.5,
       protocols: ["V2", "V3", "V4", "UNISWAPX_V2"],
-    }),
+    },
   });
 
   if (!res.ok) {
@@ -242,7 +241,7 @@ async function fetchUniswapQuoteForPair(
     return null;
   }
 
-  return (await res.json()) as UniswapAPIQuoteResponse;
+  return parseUniswapQuoteResponse(res);
 }
 
 type ClassicQuote = NonNullable<UniswapAPIQuoteResponse["quote"]>;

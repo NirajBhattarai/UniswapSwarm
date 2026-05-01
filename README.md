@@ -72,14 +72,14 @@ flowchart TD
 
 ### Agent Roles
 
-| Agent | Package | Role |
-|-------|---------|------|
+| Agent          | Package            | Role                                                                                                                                                                                                                                |
+| -------------- | ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Researcher** | `agent-researcher` | Fetches live Uniswap pool data, CoinGecko market data, Fear & Greed index, Reddit/news narrative signal; detects market narrative (`ai \| safe_haven \| defi \| l2 \| staking \| neutral`); returns ranked `TokenCandidate` objects |
-| **Planner** | `agent-planner` | Reads Researcher output and produces a structured `TradePlan` with strategy type, constraints, and tasks |
-| **Risk** | `agent-risk` | Scores each candidate (honeypot, low liquidity, MEV risk, …) and flags unsafe tokens |
-| **Strategy** | `agent-strategy` | Selects the best trade route, sizes the position, and sets slippage/fee parameters |
-| **Critic** | `agent-critic` | Reviews the fully assembled plan and approves or rejects it with a confidence score |
-| **Executor** | `agent-executor` | Submits the swap via Uniswap's `SwapRouter02` (supports dry-run and simulation-only modes) |
+| **Planner**    | `agent-planner`    | Reads Researcher output and produces a structured `TradePlan` with strategy type, constraints, and tasks                                                                                                                            |
+| **Risk**       | `agent-risk`       | Scores each candidate (honeypot, low liquidity, MEV risk, …) and flags unsafe tokens                                                                                                                                                |
+| **Strategy**   | `agent-strategy`   | Selects the best trade route, sizes the position, and sets slippage/fee parameters                                                                                                                                                  |
+| **Critic**     | `agent-critic`     | Reviews the fully assembled plan and approves or rejects it with a confidence score                                                                                                                                                 |
+| **Executor**   | `agent-executor`   | Submits the swap via Uniswap's `SwapRouter02` (supports dry-run and simulation-only modes)                                                                                                                                          |
 
 All LLM calls go through `@swarm/compute` (`ZGCompute`) — a thin wrapper around the [0G Serving Broker](https://github.com/0glabs/0g-serving-broker) that auto-manages ledger deposits and provider acknowledgement.
 
@@ -111,6 +111,7 @@ sequenceDiagram
 ```
 
 **Training results (task `dfe58ce0`):**
+
 - Model: `Qwen2.5-0.5B-Instruct` · LoRA rank=8, alpha=32, dropout=0.1
 - Dataset: 625 JSONL lines (352 unique examples + 154 address-based pairs)
 - 3 epochs · 237 steps · 209s · train_loss 6.834 → **0.4386** (final epoch step: 0.09)
@@ -227,10 +228,10 @@ cp .env.example .env
 
 #### Fine-tuning (`scripts/train-model.ts`)
 
-| Variable        | Description                                                    |
-| --------------- | -------------------------------------------------------------- |
-| `ZG_PRIVATE_KEY`| Same key used for inference — covers the fine-tune sub-account |
-| `ZG_CHAIN_RPC`  | 0G EVM RPC (testnet only — fine-tuning is testnet-only)        |
+| Variable         | Description                                                    |
+| ---------------- | -------------------------------------------------------------- |
+| `ZG_PRIVATE_KEY` | Same key used for inference — covers the fine-tune sub-account |
+| `ZG_CHAIN_RPC`   | 0G EVM RPC (testnet only — fine-tuning is testnet-only)        |
 
 #### CopilotKit cockpit / A2A integration
 
@@ -560,27 +561,27 @@ timeline
 
 ### Key design decisions
 
-| Decision | Detail |
-|----------|--------|
-| **Single shared instance** | One `BlackboardMemory` per session (see `orchestrator.ts → createSessionContext`). Every agent holds a reference to the same object — writes are immediately visible to subsequent agents with zero latency. |
-| **In-process Map, not a remote store** | The backing `cache` is a plain `Map<string, MemoryEntry>`. Reads are synchronous and O(1). There is no Redis, no database, no inter-process call between agents within a cycle. |
-| **Namespaced keys** | Keys follow `<agentId>/<slot>` (e.g. `researcher/report`). The `BlackboardMemory` instance adds a session namespace prefix (`sessions/<sessionId>/`) before calling 0G Storage so on-chain blobs are scoped per session. In-process reads use the short key without the prefix. |
-| **Async 0G Storage write** | Every `memory.write()` fires `storage.store()` concurrently, awaits the root hash, and falls back to a local SHA-256 if 0G is unreachable — so a storage outage never stalls the agent pipeline. |
-| **LLM context injection** | `memory.contextFor(excludeKey)` formats all prior entries as a Markdown block (`## Shared swarm memory (previous agents)` / `### <role>\n<payload>`) and appends it to the agent's system/user prompt. Agents pass their own write key as `excludeKey` so they never read their own (yet-to-be-written) slot. |
-| **Typed reads** | `memory.readValue<T>(key)` returns the stored value cast to `T` (or `undefined`). Agents use this for structured programmatic access (e.g. `memory.readValue<Critique>("critic/critique")`), while `contextFor()` is used for raw LLM prompt assembly. |
-| **Cross-session isolation** | Each session has its own `SessionContext` (and therefore its own `BlackboardMemory` Map). Sessions are stored in `orchestrator.sessionContexts: Map<sessionId, SessionContext>` and never share memory. |
+| Decision                               | Detail                                                                                                                                                                                                                                                                                                        |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Single shared instance**             | One `BlackboardMemory` per session (see `orchestrator.ts → createSessionContext`). Every agent holds a reference to the same object — writes are immediately visible to subsequent agents with zero latency.                                                                                                  |
+| **In-process Map, not a remote store** | The backing `cache` is a plain `Map<string, MemoryEntry>`. Reads are synchronous and O(1). There is no Redis, no database, no inter-process call between agents within a cycle.                                                                                                                               |
+| **Namespaced keys**                    | Keys follow `<agentId>/<slot>` (e.g. `researcher/report`). The `BlackboardMemory` instance adds a session namespace prefix (`sessions/<sessionId>/`) before calling 0G Storage so on-chain blobs are scoped per session. In-process reads use the short key without the prefix.                               |
+| **Async 0G Storage write**             | Every `memory.write()` fires `storage.store()` concurrently, awaits the root hash, and falls back to a local SHA-256 if 0G is unreachable — so a storage outage never stalls the agent pipeline.                                                                                                              |
+| **LLM context injection**              | `memory.contextFor(excludeKey)` formats all prior entries as a Markdown block (`## Shared swarm memory (previous agents)` / `### <role>\n<payload>`) and appends it to the agent's system/user prompt. Agents pass their own write key as `excludeKey` so they never read their own (yet-to-be-written) slot. |
+| **Typed reads**                        | `memory.readValue<T>(key)` returns the stored value cast to `T` (or `undefined`). Agents use this for structured programmatic access (e.g. `memory.readValue<Critique>("critic/critique")`), while `contextFor()` is used for raw LLM prompt assembly.                                                        |
+| **Cross-session isolation**            | Each session has its own `SessionContext` (and therefore its own `BlackboardMemory` Map). Sessions are stored in `orchestrator.sessionContexts: Map<sessionId, SessionContext>` and never share memory.                                                                                                       |
 
 ### KV schema
 
-| Key                         | Written by  | TypeScript type        | Read by                   |
-| --------------------------- | ----------- | ---------------------- | ------------------------- |
-| `researcher/report`         | Researcher  | `ResearchReport`       | Planner, Risk, Strategy, Critic, Executor |
-| `researcher/wallet_holdings`| Researcher  | `WalletHolding[]`      | Executor                  |
-| `planner/plan`              | Planner     | `TradePlan`            | Risk, Strategy, Critic    |
-| `risk/assessments`          | Risk        | `RiskAssessment[]`     | Strategy, Critic          |
-| `strategy/proposal`         | Strategy    | `TradeStrategy`        | Critic, Executor          |
-| `critic/critique`           | Critic      | `Critique`             | Executor                  |
-| `executor/result`           | Executor    | `ExecutionResult`      | Orchestrator (UI stream)  |
+| Key                          | Written by | TypeScript type    | Read by                                   |
+| ---------------------------- | ---------- | ------------------ | ----------------------------------------- |
+| `researcher/report`          | Researcher | `ResearchReport`   | Planner, Risk, Strategy, Critic, Executor |
+| `researcher/wallet_holdings` | Researcher | `WalletHolding[]`  | Executor                                  |
+| `planner/plan`               | Planner    | `TradePlan`        | Risk, Strategy, Critic                    |
+| `risk/assessments`           | Risk       | `RiskAssessment[]` | Strategy, Critic                          |
+| `strategy/proposal`          | Strategy   | `TradeStrategy`    | Critic, Executor                          |
+| `critic/critique`            | Critic     | `Critique`         | Executor                                  |
+| `executor/result`            | Executor   | `ExecutionResult`  | Orchestrator (UI stream)                  |
 
 ### Reading memory in code
 
@@ -593,7 +594,12 @@ const context = this.memory.contextFor("strategy/proposal");
 // → "## Shared swarm memory (previous agents)\n### Researcher\n…\n### Planner\n…"
 
 // Write — persists to in-process Map + fires async 0G Storage upload
-await this.memory.write("strategy/proposal", "strategy", "Strategy Agent", payload);
+await this.memory.write(
+  "strategy/proposal",
+  "strategy",
+  "Strategy Agent",
+  payload,
+);
 
 // Dump all entries (chronological) — used by orchestrator for UI streaming
 const all = this.memory.readAll(); // MemoryEntry[]
@@ -652,11 +658,11 @@ and is exposed as `STABLECOIN_SYMBOLS`, `STABLECOIN_ADDRESSES`, and
 
 ### Scripts
 
-| Script | What's new |
-|--------|------------|
+| Script           | What's new                                                                                                                                                                                                                                                                 |
+| ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `train-model.ts` | Full 0G fine-tuning pipeline: JSONL dataset generation (625 lines, 352 examples, 154 address pairs), TEE task submission, 65s rate-limit retry logic, LoRA download, 86-prompt inference verification. Supports `--skip-train --task-id <uuid>` to resume completed tasks. |
-| `check-model.ts` | Quick smoke-test: lists available 0G inference providers and runs a single classification prompt |
-| `fund-ledger.ts` | Unchanged — top-up helper |
+| `check-model.ts` | Quick smoke-test: lists available 0G inference providers and runs a single classification prompt                                                                                                                                                                           |
+| `fund-ledger.ts` | Unchanged — top-up helper                                                                                                                                                                                                                                                  |
 
 ---
 

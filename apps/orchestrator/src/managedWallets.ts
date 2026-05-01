@@ -149,8 +149,7 @@ export async function getManagedPrivateKey(
 export async function isManagedWalletFunded(
   managedAddress: string,
 ): Promise<boolean> {
-  const rpc =
-    process.env.ZG_CHAIN_RPC ?? "https://evmrpc-testnet.0g.ai";
+  const rpc = process.env.ZG_CHAIN_RPC ?? "https://evmrpc-testnet.0g.ai";
   const MIN = BigInt(10) * BigInt(10) ** BigInt(18);
   try {
     const res = await fetch(rpc, {

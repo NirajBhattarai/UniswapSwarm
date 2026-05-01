@@ -52,19 +52,22 @@ function parseArgs(argv: string[]): Record<string, string> {
   for (let i = 0; i < argv.length; i++) {
     const cur = argv[i];
     if (cur && cur.startsWith("--")) {
-      const key  = cur.slice(2);
+      const key = cur.slice(2);
       const next = argv[i + 1];
-      const val  = next !== undefined && !next.startsWith("--") ? (argv[++i] ?? "true") : "true";
+      const val =
+        next !== undefined && !next.startsWith("--")
+          ? (argv[++i] ?? "true")
+          : "true";
       result[key] = val;
     }
   }
   return result;
 }
 
-const args        = parseArgs(process.argv.slice(2));
-const PROVIDER    = args["provider"] ?? "";
-const OUTPUT_DIR  = args["output"]   ?? "./output/token-classifier";
-const MODEL_NAME  = args["model"]    ?? "Qwen2.5-0.5B-Instruct";
+const args = parseArgs(process.argv.slice(2));
+const PROVIDER = args["provider"] ?? "";
+const OUTPUT_DIR = args["output"] ?? "./output/token-classifier";
+const MODEL_NAME = args["model"] ?? "Qwen2.5-0.5B-Instruct";
 const EXTRA_STABLE_ADDRESSES = args["extra-stable-addresses"] ?? "";
 
 function resolveFineTuneTaskId(cliTaskId: string): string {
@@ -74,9 +77,12 @@ function resolveFineTuneTaskId(cliTaskId: string): string {
   if (fromEnv) return fromEnv;
   const marker = path.join(path.resolve(OUTPUT_DIR), ".last-fine-tune-task-id");
   try {
-    const fromFile = fs.readFileSync(marker, "utf-8").trim().split(/\s+/)[0] ?? "";
+    const fromFile =
+      fs.readFileSync(marker, "utf-8").trim().split(/\s+/)[0] ?? "";
     if (fromFile) return fromFile;
-  } catch { /* missing or unreadable */ }
+  } catch {
+    /* missing or unreadable */
+  }
   return "";
 }
 
@@ -86,7 +92,9 @@ if (!TASK_ID) {
   console.error("ERROR: No fine-tune task id. Use one of:");
   console.error("  • pnpm run check-model -- --task-id <uuid>");
   console.error("  • Set ZG_FINE_TUNE_TASK_ID in .env");
-  console.error(`  • Run train-model (writes ${path.join(path.resolve(OUTPUT_DIR), ".last-fine-tune-task-id")})`);
+  console.error(
+    `  • Run train-model (writes ${path.join(path.resolve(OUTPUT_DIR), ".last-fine-tune-task-id")})`,
+  );
   process.exit(1);
 }
 
@@ -94,7 +102,10 @@ if (!TASK_ID) {
 
 function extractPrivateKey(raw: string): string {
   const match = raw.match(/(?:0x)?([0-9a-fA-F]{64})/);
-  if (!match) throw new Error(`ZG_PRIVATE_KEY is not a valid 64-char hex key. Got: "${raw.slice(0, 20)}…"`);
+  if (!match)
+    throw new Error(
+      `ZG_PRIVATE_KEY is not a valid 64-char hex key. Got: "${raw.slice(0, 20)}…"`,
+    );
   return match[1]!;
 }
 
@@ -120,9 +131,9 @@ const SYSTEM_PROMPT =
 type TestCategory = "L1" | "L2" | "Stable" | "DeFi" | "RWA" | "AI";
 
 interface TestCase {
-  q:                string;
+  q: string;
   expectedCategory: string;
-  category:         TestCategory;
+  category: TestCategory;
 }
 
 function normalizeAddress(a: string): string | null {
@@ -150,7 +161,7 @@ function buildTestCases(extraStableAddressesCsv: string): TestCase[] {
     .map(normalizeAddress)
     .filter((x): x is string => x !== null)
     .map((addr) => ({
-      q:        `Classify the token at Ethereum address ${addr}`,
+      q: `Classify the token at Ethereum address ${addr}`,
       expectedCategory: "Stable",
       category: "Stable",
     }));
@@ -181,62 +192,52 @@ function buildTestCases(extraStableAddressesCsv: string): TestCase[] {
       category: "Stable",
     },
     {
-      q:
-        "DAI is minted by MakerDAO. Is DAI classified as Stable or DeFi in our six-category system? One label only.",
+      q: "DAI is minted by MakerDAO. Is DAI classified as Stable or DeFi in our six-category system? One label only.",
       expectedCategory: "Stable",
       category: "Stable",
     },
     {
-      q:
-        "WBTC is a wrapped Bitcoin ERC-20 on Ethereum. Classify WBTC: L1, L2, Stable, DeFi, RWA, or AI?",
+      q: "WBTC is a wrapped Bitcoin ERC-20 on Ethereum. Classify WBTC: L1, L2, Stable, DeFi, RWA, or AI?",
       expectedCategory: "L1",
       category: "L1",
     },
     {
-      q:
-        "LINK powers Chainlink oracles. Some confuse it with AI infrastructure. Classify LINK: DeFi or AI? One word label.",
+      q: "LINK powers Chainlink oracles. Some confuse it with AI infrastructure. Classify LINK: DeFi or AI? One word label.",
       expectedCategory: "DeFi",
       category: "DeFi",
     },
     {
-      q:
-        "LDO is governance for Lido liquid staking. Classify LDO as L2 or DeFi — one label only.",
+      q: "LDO is governance for Lido liquid staking. Classify LDO as L2 or DeFi — one label only.",
       expectedCategory: "DeFi",
       category: "DeFi",
     },
     {
-      q:
-        "MKR is Maker governance, not the DAI stablecoin itself. Classify MKR: Stable or DeFi?",
+      q: "MKR is Maker governance, not the DAI stablecoin itself. Classify MKR: Stable or DeFi?",
       expectedCategory: "DeFi",
       category: "DeFi",
     },
     {
-      q:
-        "PAXG is allocated to physical gold. Is it RWA or L1? One category.",
+      q: "PAXG is allocated to physical gold. Is it RWA or L1? One category.",
       expectedCategory: "RWA",
       category: "RWA",
     },
     {
-      q:
-        "CRVUSD is Curve’s USD-pegged stablecoin. Classify: Stable or DeFi?",
+      q: "CRVUSD is Curve’s USD-pegged stablecoin. Classify: Stable or DeFi?",
       expectedCategory: "Stable",
       category: "Stable",
     },
     {
-      q:
-        "FET (Fetch.ai) is used for autonomous agents. Classify: AI or DeFi?",
+      q: "FET (Fetch.ai) is used for autonomous agents. Classify: AI or DeFi?",
       expectedCategory: "AI",
       category: "AI",
     },
     {
-      q:
-        "Native gas token of Ethereum mainnet (ETH): L1 or L2?",
+      q: "Native gas token of Ethereum mainnet (ETH): L1 or L2?",
       expectedCategory: "L1",
       category: "L1",
     },
     {
-      q:
-        "UNI is Uniswap DEX governance. Not a stablecoin. One category from our six.",
+      q: "UNI is Uniswap DEX governance. Not a stablecoin. One category from our six.",
       expectedCategory: "DeFi",
       category: "DeFi",
     },
@@ -362,48 +363,156 @@ function buildTestCases(extraStableAddressesCsv: string): TestCase[] {
 
   return [
     // L1 / quote context
-    { q: "What type of token is ETH?",           expectedCategory: "L1",     category: "L1" },
-    { q: `Classify the token at Ethereum address ${weth}`, expectedCategory: "L1", category: "L1" },
-    { q: "Classify the token: Solana (SOL)",     expectedCategory: "L1",     category: "L1" },
+    { q: "What type of token is ETH?", expectedCategory: "L1", category: "L1" },
+    {
+      q: `Classify the token at Ethereum address ${weth}`,
+      expectedCategory: "L1",
+      category: "L1",
+    },
+    {
+      q: "Classify the token: Solana (SOL)",
+      expectedCategory: "L1",
+      category: "L1",
+    },
     // L2
-    { q: "What type of token is ARB?",           expectedCategory: "L2",     category: "L2" },
-    { q: "What type of token is POL?",           expectedCategory: "L2",     category: "L2" },
-    { q: "Classify the token: Starknet (STRK)",  expectedCategory: "L2",     category: "L2" },
+    { q: "What type of token is ARB?", expectedCategory: "L2", category: "L2" },
+    { q: "What type of token is POL?", expectedCategory: "L2", category: "L2" },
+    {
+      q: "Classify the token: Starknet (STRK)",
+      expectedCategory: "L2",
+      category: "L2",
+    },
     // Stable — symbols from shared defs (agent isStablecoin list)
     ...stableSlice.map((t) => ({
-      q:        `What type of token is ${t.symbol}?`,
+      q: `What type of token is ${t.symbol}?`,
       expectedCategory: "Stable",
       category: "Stable" as const,
     })),
-    { q: `What token has Ethereum mainnet address ${usdc}?`, expectedCategory: "Stable", category: "Stable" },
-    { q: `Classify the token at Ethereum address ${stableSlice[2]!.address}`, expectedCategory: "Stable", category: "Stable" },
+    {
+      q: `What token has Ethereum mainnet address ${usdc}?`,
+      expectedCategory: "Stable",
+      category: "Stable",
+    },
+    {
+      q: `Classify the token at Ethereum address ${stableSlice[2]!.address}`,
+      expectedCategory: "Stable",
+      category: "Stable",
+    },
     // DeFi — volatile / governance (not stable)
-    { q: "What type of token is UNI?",           expectedCategory: "DeFi",   category: "DeFi" },
-    { q: "What type of token is AAVE?",          expectedCategory: "DeFi",   category: "DeFi" },
-    { q: `Classify the token at Ethereum address ${reg["LINK"]!.address}`, expectedCategory: "DeFi", category: "DeFi" },
+    {
+      q: "What type of token is UNI?",
+      expectedCategory: "DeFi",
+      category: "DeFi",
+    },
+    {
+      q: "What type of token is AAVE?",
+      expectedCategory: "DeFi",
+      category: "DeFi",
+    },
+    {
+      q: `Classify the token at Ethereum address ${reg["LINK"]!.address}`,
+      expectedCategory: "DeFi",
+      category: "DeFi",
+    },
     // RWA
-    { q: "What type of token is ONDO?",          expectedCategory: "RWA",    category: "RWA" },
-    { q: "What type of token is PAXG?",          expectedCategory: "RWA",    category: "RWA" },
+    {
+      q: "What type of token is ONDO?",
+      expectedCategory: "RWA",
+      category: "RWA",
+    },
+    {
+      q: "What type of token is PAXG?",
+      expectedCategory: "RWA",
+      category: "RWA",
+    },
     // AI
-    { q: "What type of token is FET?",           expectedCategory: "AI",     category: "AI" },
-    { q: "What type of token is RNDR?",          expectedCategory: "AI",     category: "AI" },
+    { q: "What type of token is FET?", expectedCategory: "AI", category: "AI" },
+    {
+      q: "What type of token is RNDR?",
+      expectedCategory: "AI",
+      category: "AI",
+    },
     // ── New token checks ───────────────────────────────────────────────────────
-    { q: "What type of token is LINK?",          expectedCategory: "DeFi",   category: "DeFi" },
-    { q: "What type of token is stETH?",         expectedCategory: "DeFi",   category: "DeFi" },
-    { q: "What type of token is wstETH?",        expectedCategory: "DeFi",   category: "DeFi" },
-    { q: "What type of token is cbETH?",         expectedCategory: "DeFi",   category: "DeFi" },
-    { q: "What type of token is rETH?",          expectedCategory: "DeFi",   category: "DeFi" },
-    { q: "What type of token is RPL?",           expectedCategory: "DeFi",   category: "DeFi" },
-    { q: "What type of token is THETA?",         expectedCategory: "L1",     category: "L1" },
-    { q: "What type of token is SHIB?",          expectedCategory: "DeFi",   category: "DeFi" },
-    { q: "What type of token is PEPE?",          expectedCategory: "DeFi",   category: "DeFi" },
-    { q: "Classify the token at Ethereum address 0x514910771AF9Ca656af840dff83E8264EcF986CA",  expectedCategory: "DeFi",   category: "DeFi" },
-    { q: "What token has Ethereum mainnet address 0xae7ab96520DE3A18E5e111B5EaAb095312D7fE84?", expectedCategory: "DeFi",   category: "DeFi" },
-    { q: "Classify the token at Ethereum address 0x7f39C581F595B53c5cb19bD0b3f8dA6c935E2Ca0",  expectedCategory: "DeFi",   category: "DeFi" },
-    { q: "What token has Ethereum mainnet address 0xae78736Cd615f374D3085123A210448E74Fc6393?", expectedCategory: "DeFi",   category: "DeFi" },
-    { q: "Classify the token at Ethereum address 0x3883f5e181fccaF8410FA61e12b59BAd963fb645",  expectedCategory: "L1",     category: "L1" },
-    { q: "What token has Ethereum mainnet address 0x95aD61b0a150d79219dCF64E1E6Cc01f0B64C4cE?", expectedCategory: "DeFi",   category: "DeFi" },
-    { q: "Classify the token at Ethereum address 0x6982508145454Ce325dDbE47a25d4ec3d2311933",  expectedCategory: "DeFi",   category: "DeFi" },
+    {
+      q: "What type of token is LINK?",
+      expectedCategory: "DeFi",
+      category: "DeFi",
+    },
+    {
+      q: "What type of token is stETH?",
+      expectedCategory: "DeFi",
+      category: "DeFi",
+    },
+    {
+      q: "What type of token is wstETH?",
+      expectedCategory: "DeFi",
+      category: "DeFi",
+    },
+    {
+      q: "What type of token is cbETH?",
+      expectedCategory: "DeFi",
+      category: "DeFi",
+    },
+    {
+      q: "What type of token is rETH?",
+      expectedCategory: "DeFi",
+      category: "DeFi",
+    },
+    {
+      q: "What type of token is RPL?",
+      expectedCategory: "DeFi",
+      category: "DeFi",
+    },
+    {
+      q: "What type of token is THETA?",
+      expectedCategory: "L1",
+      category: "L1",
+    },
+    {
+      q: "What type of token is SHIB?",
+      expectedCategory: "DeFi",
+      category: "DeFi",
+    },
+    {
+      q: "What type of token is PEPE?",
+      expectedCategory: "DeFi",
+      category: "DeFi",
+    },
+    {
+      q: "Classify the token at Ethereum address 0x514910771AF9Ca656af840dff83E8264EcF986CA",
+      expectedCategory: "DeFi",
+      category: "DeFi",
+    },
+    {
+      q: "What token has Ethereum mainnet address 0xae7ab96520DE3A18E5e111B5EaAb095312D7fE84?",
+      expectedCategory: "DeFi",
+      category: "DeFi",
+    },
+    {
+      q: "Classify the token at Ethereum address 0x7f39C581F595B53c5cb19bD0b3f8dA6c935E2Ca0",
+      expectedCategory: "DeFi",
+      category: "DeFi",
+    },
+    {
+      q: "What token has Ethereum mainnet address 0xae78736Cd615f374D3085123A210448E74Fc6393?",
+      expectedCategory: "DeFi",
+      category: "DeFi",
+    },
+    {
+      q: "Classify the token at Ethereum address 0x3883f5e181fccaF8410FA61e12b59BAd963fb645",
+      expectedCategory: "L1",
+      category: "L1",
+    },
+    {
+      q: "What token has Ethereum mainnet address 0x95aD61b0a150d79219dCF64E1E6Cc01f0B64C4cE?",
+      expectedCategory: "DeFi",
+      category: "DeFi",
+    },
+    {
+      q: "Classify the token at Ethereum address 0x6982508145454Ce325dDbE47a25d4ec3d2311933",
+      expectedCategory: "DeFi",
+      category: "DeFi",
+    },
     ...brutal,
     ...extraStable,
   ];
@@ -418,28 +527,39 @@ async function checkTaskStatus(ft: any, providerAddr: string): Promise<string> {
   console.log("\n📋  Check 1 — Task status");
   console.log("─".repeat(40));
   try {
-    const task     = await ft.getTask(providerAddr, TASK_ID);
-    const status   = (task?.progress as string | undefined) ?? "unknown";
-    const finished = ["finished", "completed", "done", "succeeded", "delivered"].includes(
+    const task = await ft.getTask(providerAddr, TASK_ID);
+    const status = (task?.progress as string | undefined) ?? "unknown";
+    const finished = [
+      "finished",
+      "completed",
+      "done",
+      "succeeded",
+      "delivered",
+    ].includes(status.toLowerCase());
+    const failed = ["failed", "error", "cancelled"].includes(
       status.toLowerCase(),
     );
-    const failed   = ["failed", "error", "cancelled"].includes(status.toLowerCase());
-    const icon     = finished ? "✅" : failed ? "❌" : "⏳";
-    const color    = finished ? "\x1b[32m" : failed ? "\x1b[31m" : "\x1b[33m";
+    const icon = finished ? "✅" : failed ? "❌" : "⏳";
+    const color = finished ? "\x1b[32m" : failed ? "\x1b[31m" : "\x1b[33m";
     console.log(`   ${icon}  Status: ${color}${status}\x1b[0m`);
     if (!finished && !failed) {
       console.log("   ℹ️   Training may still be in progress.");
     }
     return status;
   } catch (err) {
-    console.warn(`   ⚠️  Could not fetch task: ${err instanceof Error ? err.message : String(err)}`);
+    console.warn(
+      `   ⚠️  Could not fetch task: ${err instanceof Error ? err.message : String(err)}`,
+    );
     return "unknown";
   }
 }
 
 // ─── Check 2: local artifacts ─────────────────────────────────────────────────
 
-function checkArtifacts(outputPath: string): { count: number; totalKB: number } {
+function checkArtifacts(outputPath: string): {
+  count: number;
+  totalKB: number;
+} {
   console.log("\n📂  Check 2 — Local model artifacts");
   console.log("─".repeat(40));
   if (!fs.existsSync(outputPath)) {
@@ -449,10 +569,18 @@ function checkArtifacts(outputPath: string): { count: number; totalKB: number } 
 
   const files = (fs.readdirSync(outputPath, { recursive: true }) as string[])
     .map((f) => ({ name: f, full: path.join(outputPath, f) }))
-    .filter(({ full }) => { try { return fs.statSync(full).isFile(); } catch { return false; } });
+    .filter(({ full }) => {
+      try {
+        return fs.statSync(full).isFile();
+      } catch {
+        return false;
+      }
+    });
 
   if (files.length === 0) {
-    console.warn("   ⚠️  Output directory is empty — model may not have downloaded yet.");
+    console.warn(
+      "   ⚠️  Output directory is empty — model may not have downloaded yet.",
+    );
     return { count: 0, totalKB: 0 };
   }
 
@@ -462,43 +590,54 @@ function checkArtifacts(outputPath: string): { count: number; totalKB: number } 
     totalKB += kb;
     console.log(`   ✅  ${name}  (${kb.toFixed(1)} KB)`);
   });
-  console.log(`   Total: ${files.length} file(s), ${(totalKB / 1024).toFixed(2)} MB`);
+  console.log(
+    `   Total: ${files.length} file(s), ${(totalKB / 1024).toFixed(2)} MB`,
+  );
   return { count: files.length, totalKB };
 }
 
 // ─── Check 3: live inference ──────────────────────────────────────────────────
 
 interface InferenceResult {
-  passed:     number;
-  failed:     number;
-  total:      number;
+  passed: number;
+  failed: number;
+  total: number;
   byCategory: Record<TestCategory, { passed: number; total: number }>;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function runInferenceCheck(broker: any, providerAddr: string): Promise<InferenceResult> {
+async function runInferenceCheck(
+  broker: any,
+  providerAddr: string,
+): Promise<InferenceResult> {
   const result: InferenceResult = {
-    passed: 0, failed: 0, total: TEST_CASES.length,
+    passed: 0,
+    failed: 0,
+    total: TEST_CASES.length,
     byCategory: {
-      L1:     { passed: 0, total: 0 },
-      L2:     { passed: 0, total: 0 },
+      L1: { passed: 0, total: 0 },
+      L2: { passed: 0, total: 0 },
       Stable: { passed: 0, total: 0 },
-      DeFi:   { passed: 0, total: 0 },
-      RWA:    { passed: 0, total: 0 },
-      AI:     { passed: 0, total: 0 },
+      DeFi: { passed: 0, total: 0 },
+      RWA: { passed: 0, total: 0 },
+      AI: { passed: 0, total: 0 },
     },
   };
 
-  console.log(`\n🔬  Check 3 — Live inference (${TEST_CASES.length} prompts, incl. Stable from shared registry)`);
+  console.log(
+    `\n🔬  Check 3 — Live inference (${TEST_CASES.length} prompts, incl. Stable from shared registry)`,
+  );
   console.log("─".repeat(40));
 
   // List inference services
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let services: any[] = [];
   try {
-    services = await broker.inference.listService() as typeof services;
+    services = (await broker.inference.listService()) as typeof services;
   } catch (err) {
-    console.warn(`   ⚠️  Could not list inference services: ${err instanceof Error ? err.message : String(err)}`);
+    console.warn(
+      `   ⚠️  Could not list inference services: ${err instanceof Error ? err.message : String(err)}`,
+    );
     return result;
   }
   if (services.length === 0) {
@@ -507,27 +646,44 @@ async function runInferenceCheck(broker: any, providerAddr: string): Promise<Inf
   }
 
   // Pick service — prefer same provider as fine-tuning
-  const svc = (
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    services.find((s: any) => s.provider?.toLowerCase() === providerAddr.toLowerCase()) ??
+  const svc = // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (services.find(
+    (s: any) => s.provider?.toLowerCase() === providerAddr.toLowerCase(),
+  ) ??
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     services.find((s: any) => s.serviceType === "chatbot") ??
-    services[0]
-  ) as { provider: string; model?: string; url?: string; endpoint?: string };
+    services[0]) as {
+    provider: string;
+    model?: string;
+    url?: string;
+    endpoint?: string;
+  };
 
-  console.log(`   Provider : ${svc.provider.slice(0, 14)}…  model: ${svc.model ?? "(auto)"}`);
+  console.log(
+    `   Provider : ${svc.provider.slice(0, 14)}…  model: ${svc.model ?? "(auto)"}`,
+  );
 
   // Acknowledge (non-fatal)
   try {
-    await (broker.inference.acknowledgeProviderSigner(svc.provider) as Promise<unknown>).catch(() => null);
-  } catch { /* non-fatal */ }
+    await (
+      broker.inference.acknowledgeProviderSigner(
+        svc.provider,
+      ) as Promise<unknown>
+    ).catch(() => null);
+  } catch {
+    /* non-fatal */
+  }
 
   // Resolve endpoint
   let endpoint = svc.url ?? svc.endpoint ?? "";
   try {
-    const meta = await broker.inference.getServiceMetadata(svc.provider) as { endpoint?: string };
+    const meta = (await broker.inference.getServiceMetadata(svc.provider)) as {
+      endpoint?: string;
+    };
     endpoint = meta.endpoint ?? endpoint;
-  } catch { /* non-fatal */ }
+  } catch {
+    /* non-fatal */
+  }
 
   if (!endpoint) {
     console.warn("   ⚠️  Could not resolve inference endpoint.");
@@ -537,9 +693,13 @@ async function runInferenceCheck(broker: any, providerAddr: string): Promise<Inf
   // Auth headers
   let headers: Record<string, string> = {};
   try {
-    headers = await broker.inference.getRequestHeaders(svc.provider) as Record<string, string>;
+    headers = (await broker.inference.getRequestHeaders(
+      svc.provider,
+    )) as Record<string, string>;
   } catch (err) {
-    console.warn(`   ⚠️  getRequestHeaders failed: ${err instanceof Error ? err.message : String(err)}`);
+    console.warn(
+      `   ⚠️  getRequestHeaders failed: ${err instanceof Error ? err.message : String(err)}`,
+    );
     return result;
   }
 
@@ -551,15 +711,18 @@ async function runInferenceCheck(broker: any, providerAddr: string): Promise<Inf
     result.byCategory[category].total++;
 
     const body = JSON.stringify({
-      model:       svc.model ?? MODEL_NAME,
-      messages:    [{ role: "system", content: SYSTEM_PROMPT }, { role: "user", content: q }],
-      max_tokens:  120,
+      model: svc.model ?? MODEL_NAME,
+      messages: [
+        { role: "system", content: SYSTEM_PROMPT },
+        { role: "user", content: q },
+      ],
+      max_tokens: 120,
       temperature: 0.1,
     });
 
     try {
       const res = await fetch(`${endpoint}/chat/completions`, {
-        method:  "POST",
+        method: "POST",
         headers: { ...headers, "Content-Type": "application/json" },
         body,
       });
@@ -569,35 +732,53 @@ async function runInferenceCheck(broker: any, providerAddr: string): Promise<Inf
           console.log(`   ⏳  Rate limited — waiting 65s before retry…`);
           await sleep(65_000);
           const retry = await fetch(`${endpoint}/chat/completions`, {
-            method:  "POST",
+            method: "POST",
             headers: { ...headers, "Content-Type": "application/json" },
             body,
           });
           if (retry.ok) {
-            const jsonRetry = await retry.json() as { choices: Array<{ message: { content: string } }> };
-            const answerRetry = (jsonRetry.choices[0]?.message?.content ?? "").trim();
-            const correctRetry = answerRetry.toUpperCase().includes(expectedCategory.toUpperCase());
+            const jsonRetry = (await retry.json()) as {
+              choices: Array<{ message: { content: string } }>;
+            };
+            const answerRetry = (
+              jsonRetry.choices[0]?.message?.content ?? ""
+            ).trim();
+            const correctRetry = answerRetry
+              .toUpperCase()
+              .includes(expectedCategory.toUpperCase());
             if (correctRetry) {
-              console.log(`   ✅  [${category.padEnd(6)}]  "${q.slice(0, 55)}"`);
+              console.log(
+                `   ✅  [${category.padEnd(6)}]  "${q.slice(0, 55)}"`,
+              );
               console.log(`             → ${answerRetry.slice(0, 100)}`);
               result.passed++;
               result.byCategory[category].passed++;
             } else {
-              console.log(`   ❌  [${category.padEnd(6)}]  "${q.slice(0, 55)}"`);
-              console.log(`             Expected: ${expectedCategory}  |  Got: ${answerRetry.slice(0, 100)}`);
+              console.log(
+                `   ❌  [${category.padEnd(6)}]  "${q.slice(0, 55)}"`,
+              );
+              console.log(
+                `             Expected: ${expectedCategory}  |  Got: ${answerRetry.slice(0, 100)}`,
+              );
               result.failed++;
             }
             continue;
           }
         }
-        console.log(`   ❌  [${category.padEnd(6)}]  "${q.slice(0, 55)}"  → HTTP ${res.status}`);
+        console.log(
+          `   ❌  [${category.padEnd(6)}]  "${q.slice(0, 55)}"  → HTTP ${res.status}`,
+        );
         result.failed++;
         continue;
       }
 
-      const json    = await res.json() as { choices: Array<{ message: { content: string } }> };
-      const answer  = (json.choices[0]?.message?.content ?? "").trim();
-      const correct = answer.toUpperCase().includes(expectedCategory.toUpperCase());
+      const json = (await res.json()) as {
+        choices: Array<{ message: { content: string } }>;
+      };
+      const answer = (json.choices[0]?.message?.content ?? "").trim();
+      const correct = answer
+        .toUpperCase()
+        .includes(expectedCategory.toUpperCase());
 
       if (correct) {
         console.log(`   ✅  [${category.padEnd(6)}]  "${q.slice(0, 55)}"`);
@@ -606,11 +787,15 @@ async function runInferenceCheck(broker: any, providerAddr: string): Promise<Inf
         result.byCategory[category].passed++;
       } else {
         console.log(`   ❌  [${category.padEnd(6)}]  "${q.slice(0, 55)}"`);
-        console.log(`             Expected: ${expectedCategory}  |  Got: ${answer.slice(0, 100)}`);
+        console.log(
+          `             Expected: ${expectedCategory}  |  Got: ${answer.slice(0, 100)}`,
+        );
         result.failed++;
       }
     } catch (err) {
-      console.log(`   ⚠️  [${category.padEnd(6)}]  "${q.slice(0, 55)}" — ${err instanceof Error ? err.message : String(err)}`);
+      console.log(
+        `   ⚠️  [${category.padEnd(6)}]  "${q.slice(0, 55)}" — ${err instanceof Error ? err.message : String(err)}`,
+      );
       result.failed++;
     }
   }
@@ -622,34 +807,66 @@ async function runInferenceCheck(broker: any, providerAddr: string): Promise<Inf
 
 function printReport(
   taskStatus: string,
-  artifacts:  { count: number; totalKB: number },
-  inference:  InferenceResult,
+  artifacts: { count: number; totalKB: number },
+  inference: InferenceResult,
 ): void {
-  const pct   = inference.total > 0 ? Math.round((inference.passed / inference.total) * 100) : 0;
-  const grade = pct === 100 ? "🏆 EXCELLENT" : pct >= 80 ? "✅ GOOD" : pct >= 60 ? "⚠️  FAIR" : "❌ POOR";
+  const pct =
+    inference.total > 0
+      ? Math.round((inference.passed / inference.total) * 100)
+      : 0;
+  const grade =
+    pct === 100
+      ? "🏆 EXCELLENT"
+      : pct >= 80
+        ? "✅ GOOD"
+        : pct >= 60
+          ? "⚠️  FAIR"
+          : "❌ POOR";
 
-  const taskOk      = ["finished", "completed", "done", "succeeded", "delivered"].includes(taskStatus.toLowerCase());
-  const artifactOk  = artifacts.count > 0;
+  const taskOk = [
+    "finished",
+    "completed",
+    "done",
+    "succeeded",
+    "delivered",
+  ].includes(taskStatus.toLowerCase());
+  const artifactOk = artifacts.count > 0;
   const inferenceOk = pct >= 80;
 
   console.log("\n" + "═".repeat(62));
   console.log("  TRAINING QUALITY REPORT");
   console.log("═".repeat(62));
   console.log(`   Task ID     : ${TASK_ID}`);
-  console.log(`   Task status : ${taskOk ? "\x1b[32m" : "\x1b[33m"}${taskStatus}\x1b[0m   ${taskOk ? "✅" : "⏳"}`);
-  console.log(`   Artifacts   : ${artifacts.count} file(s)  (${(artifacts.totalKB / 1024).toFixed(2)} MB)   ${artifactOk ? "✅" : "⚠️"}`);
-  console.log(`   Inference   : ${inference.passed}/${inference.total} correct  (${pct}%)   ${inferenceOk ? "✅" : pct >= 60 ? "⚠️" : "❌"}`);
+  console.log(
+    `   Task status : ${taskOk ? "\x1b[32m" : "\x1b[33m"}${taskStatus}\x1b[0m   ${taskOk ? "✅" : "⏳"}`,
+  );
+  console.log(
+    `   Artifacts   : ${artifacts.count} file(s)  (${(artifacts.totalKB / 1024).toFixed(2)} MB)   ${artifactOk ? "✅" : "⚠️"}`,
+  );
+  console.log(
+    `   Inference   : ${inference.passed}/${inference.total} correct  (${pct}%)   ${inferenceOk ? "✅" : pct >= 60 ? "⚠️" : "❌"}`,
+  );
 
   console.log("\n   Accuracy by category:");
-  const categories: readonly TestCategory[] = ["L1", "L2", "Stable", "DeFi", "RWA", "AI"];
+  const categories: readonly TestCategory[] = [
+    "L1",
+    "L2",
+    "Stable",
+    "DeFi",
+    "RWA",
+    "AI",
+  ];
   for (const cat of categories) {
     const { passed, total } = inference.byCategory[cat];
     if (total === 0) continue;
-    const catPct  = Math.round((passed / total) * 100);
-    const filled  = Math.round(catPct / 10);
-    const bar     = "█".repeat(filled) + "░".repeat(10 - filled);
-    const color   = catPct === 100 ? "\x1b[32m" : catPct >= 60 ? "\x1b[33m" : "\x1b[31m";
-    console.log(`   ${cat.padEnd(6)}  [${color}${bar}\x1b[0m]  ${passed}/${total}  (${catPct}%)`);
+    const catPct = Math.round((passed / total) * 100);
+    const filled = Math.round(catPct / 10);
+    const bar = "█".repeat(filled) + "░".repeat(10 - filled);
+    const color =
+      catPct === 100 ? "\x1b[32m" : catPct >= 60 ? "\x1b[33m" : "\x1b[31m";
+    console.log(
+      `   ${cat.padEnd(6)}  [${color}${bar}\x1b[0m]  ${passed}/${total}  (${catPct}%)`,
+    );
   }
 
   console.log(`\n   Overall grade : ${grade}`);
@@ -661,7 +878,9 @@ function printReport(
     });
     console.log("\n   Suggestions to improve:");
     if (weakCats.length > 0) {
-      console.log(`   • Weak categories: ${weakCats.join(", ")} — add more training examples for these`);
+      console.log(
+        `   • Weak categories: ${weakCats.join(", ")} — add more training examples for these`,
+      );
     }
     if (pct < 60) {
       console.log("   • Increase num_train_epochs (try 5–10 instead of 3)");
@@ -676,8 +895,9 @@ function printReport(
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
-  const ZG_CHAIN_RPC = process.env["ZG_CHAIN_RPC"] ?? "https://evmrpc-testnet.0g.ai";
-  const privateKey   = extractPrivateKey(process.env["ZG_PRIVATE_KEY"] ?? "");
+  const ZG_CHAIN_RPC =
+    process.env["ZG_CHAIN_RPC"] ?? "https://evmrpc-testnet.0g.ai";
+  const privateKey = extractPrivateKey(process.env["ZG_PRIVATE_KEY"] ?? "");
 
   console.log("\n" + "═".repeat(62));
   console.log("  0G MODEL QUALITY CHECK");
@@ -686,19 +906,20 @@ async function main(): Promise<void> {
   console.log(`   RPC      : ${ZG_CHAIN_RPC}`);
 
   const rpcProvider = new ethers.JsonRpcProvider(ZG_CHAIN_RPC);
-  const wallet      = new ethers.Wallet(privateKey, rpcProvider);
+  const wallet = new ethers.Wallet(privateKey, rpcProvider);
   console.log(`   Wallet   : ${wallet.address}`);
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const broker = await createZGComputeNetworkBroker(wallet) as any;
-  const ft     = broker.fineTuning;
+  const broker = (await createZGComputeNetworkBroker(wallet)) as any;
+  const ft = broker.fineTuning;
 
   // Resolve provider
   let providerAddr = PROVIDER;
   if (!providerAddr) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const services: any[] = await ft.listService();
-    if (services.length === 0) throw new Error("No fine-tuning services found on testnet.");
+    if (services.length === 0)
+      throw new Error("No fine-tuning services found on testnet.");
     providerAddr = services[0].provider as string;
     console.log(`   Provider : ${providerAddr}  (auto-discovered)`);
   } else {
@@ -707,8 +928,8 @@ async function main(): Promise<void> {
 
   // Run the three checks
   const taskStatus = await checkTaskStatus(ft, providerAddr);
-  const artifacts  = checkArtifacts(path.resolve(OUTPUT_DIR));
-  const inference  = await runInferenceCheck(broker, providerAddr);
+  const artifacts = checkArtifacts(path.resolve(OUTPUT_DIR));
+  const inference = await runInferenceCheck(broker, providerAddr);
 
   // Print consolidated report
   printReport(taskStatus, artifacts, inference);

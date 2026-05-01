@@ -12,22 +12,6 @@ export const ERC20_META_ABI = [
   "function decimals() external view returns (uint8)",
 ];
 
-// ─── Multicall3 — batch ALL balance reads in a single eth_call ────────────────
-// Deployed on Ethereum mainnet (and 250+ other chains) at the canonical address.
-// getEthBalance fetches native ETH balance without a separate eth_getBalance call.
-// aggregate3 executes all calls atomically — every result is from the same block.
-export const MULTICALL3_ADDRESS = "0xcA11bde05977b3631167028862bE2a173976CA11";
-
-export const MULTICALL3_ABI = [
-  "function aggregate3(tuple(address target, bool allowFailure, bytes callData)[] calls) view returns (tuple(bool success, bytes returnData)[] returnData)",
-  "function getEthBalance(address addr) view returns (uint256 balance)",
-];
-
-// ABI fragment used only for encoding balanceOf calldata into Multicall3 calls.
-export const ERC20_BALANCE_IFACE_ABI = [
-  "function balanceOf(address owner) external view returns (uint256)",
-];
-
 // ─── Canonical token registry (Ethereum mainnet) ─────────────────────────────
 // Sourced from @swarm/shared — ETH is treated as WETH for quoting purposes.
 
@@ -44,10 +28,6 @@ export const ADDRESS_TO_SYMBOL: Record<string, string> = Object.fromEntries(
 
 export const USDC_DEF: TokenDef = SHARED_USDC_DEF as TokenDef;
 export const WETH_DEF: TokenDef = SHARED_WETH_DEF as TokenDef;
-
-export const FEE_TIERS = [500, 3000, 10_000] as const;
-
-export const MIN_POOL_LIQUIDITY_USD = 10_000;
 
 /** Placeholder EOA used as swapper for quote-only calls — not executing any swap */
 export const QUOTE_SWAPPER_ADDRESS =
@@ -224,5 +204,3 @@ export const NARRATIVE_KEYWORDS: Record<NarrativeType, string[]> = {
   ],
   neutral: [],
 };
-
-

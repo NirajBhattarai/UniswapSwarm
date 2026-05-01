@@ -3,6 +3,8 @@ import type { Impit } from "impit";
 
 import { NARRATIVE_KEYWORDS } from "../core/constants";
 import type { NarrativeSignal, NarrativeType } from "../core/types";
+import { normalizeSymbol } from "../utils";
+import { fetchTrendingTokens } from "./trendingPairs";
 
 export async function fetchNarrativeSignal(
   browser: Impit,
@@ -114,11 +116,14 @@ async function fetchFearGreed(
 
 async function fetchCoinGeckoTrending(browser: Impit): Promise<string[]> {
   try {
+    const prefetched = await fetchTrendingTokens();
+    if (prefetched.trendingSymbols.length > 0) {
+      return prefetched.trendingSymbols;
+    }
     const url = `${COINGECKO_API_BASE_URL}/search/trending`;
     const { COINGECKO_API_KEY } = getConfig();
     const headers: Record<string, string> = { Accept: "application/json" };
     if (COINGECKO_API_KEY) headers["x-cg-demo-api-key"] = COINGECKO_API_KEY;
-
     const res = await browser.fetch(url, { headers });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const json = (await res.json()) as {
@@ -126,7 +131,7 @@ async function fetchCoinGeckoTrending(browser: Impit): Promise<string[]> {
     };
     return (json.coins ?? [])
       .slice(0, 7)
-      .map((c) => c.item.symbol.toUpperCase());
+      .map((c) => normalizeSymbol(c.item.symbol));
   } catch (err) {
     logger.warn(`[Researcher] fetchCoinGeckoTrending failed: ${err}`);
     return [];

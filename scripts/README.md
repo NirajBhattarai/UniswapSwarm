@@ -23,13 +23,13 @@ Trains a `Qwen2.5-0.5B-Instruct` model on the **0G testnet** to classify crypto 
 
 **Token categories:**
 
-| Category | Tokens (examples)                        |
-|----------|------------------------------------------|
-| L1       | ETH, BTC, SOL, AVAX, BNB, ADA, ZG …     |
-| L2       | ARB, OP, MATIC, STRK, ZKS, SCROLL …     |
-| DeFi     | UNI, AAVE, CRV, GMX, DYDX, LDO …       |
-| RWA      | ONDO, PAXG, XAUT, CFG, MPLX …          |
-| AI       | FET, TAO, OCEAN, RNDR, AGIX, GRT …     |
+| Category | Tokens (examples)                   |
+| -------- | ----------------------------------- |
+| L1       | ETH, BTC, SOL, AVAX, BNB, ADA, ZG … |
+| L2       | ARB, OP, MATIC, STRK, ZKS, SCROLL … |
+| DeFi     | UNI, AAVE, CRV, GMX, DYDX, LDO …    |
+| RWA      | ONDO, PAXG, XAUT, CFG, MPLX …       |
+| AI       | FET, TAO, OCEAN, RNDR, AGIX, GRT …  |
 
 **Usage:**
 
@@ -50,10 +50,10 @@ pnpm run train-model -- --upload-method 0g-storage
 
 **Required `.env` variables:**
 
-| Variable        | Description                                          |
-|-----------------|------------------------------------------------------|
-| `ZG_PRIVATE_KEY`| 64-char hex private key for your testnet wallet      |
-| `ZG_CHAIN_RPC`  | 0G EVM RPC URL (default: `https://evmrpc-testnet.0g.ai`) |
+| Variable         | Description                                              |
+| ---------------- | -------------------------------------------------------- |
+| `ZG_PRIVATE_KEY` | 64-char hex private key for your testnet wallet          |
+| `ZG_CHAIN_RPC`   | 0G EVM RPC URL (default: `https://evmrpc-testnet.0g.ai`) |
 
 > **Testnet note:** Only `Qwen2.5-0.5B-Instruct` is supported on the 0G testnet. Using any other model name will cause a provider error.
 
@@ -65,10 +65,10 @@ Checks the current 0G Compute Network ledger balance and automatically tops it u
 
 **Decision logic:**
 
-| Ledger balance | Action                                  |
-|----------------|-----------------------------------------|
-| ≥ 5 OG         | Nothing — already funded                |
-| 1 – 5 OG       | Deposit `(5 − balance)` OG              |
+| Ledger balance | Action                                                                 |
+| -------------- | ---------------------------------------------------------------------- |
+| ≥ 5 OG         | Nothing — already funded                                               |
+| 1 – 5 OG       | Deposit `(5 − balance)` OG                                             |
 | < 1 OG / none  | Deposit as much as possible up to 5 OG, keeping 1 OG reserve in wallet |
 
 **Usage:**
@@ -79,10 +79,10 @@ pnpm run fund-ledger
 
 **Required `.env` variables:**
 
-| Variable        | Description                              |
-|-----------------|------------------------------------------|
-| `ZG_PRIVATE_KEY`| 64-char hex private key                  |
-| `ZG_CHAIN_RPC`  | 0G EVM RPC URL                           |
+| Variable         | Description             |
+| ---------------- | ----------------------- |
+| `ZG_PRIVATE_KEY` | 64-char hex private key |
+| `ZG_CHAIN_RPC`   | 0G EVM RPC URL          |
 
 ---
 
@@ -92,10 +92,10 @@ Creates the two DynamoDB tables required by the UniswapSwarm backend if they do 
 
 **Tables created:**
 
-| Table env var             | Purpose                              | Key schema                  |
-|---------------------------|--------------------------------------|-----------------------------|
-| `DYNAMODB_HISTORY_TABLE`  | Stores session / cycle records       | PK (HASH) + SK (RANGE) + GSI1 |
-| `DYNAMODB_WALLETS_TABLE`  | Stores per-user managed wallets      | `connectedAddress` (HASH)   |
+| Table env var            | Purpose                         | Key schema                    |
+| ------------------------ | ------------------------------- | ----------------------------- |
+| `DYNAMODB_HISTORY_TABLE` | Stores session / cycle records  | PK (HASH) + SK (RANGE) + GSI1 |
+| `DYNAMODB_WALLETS_TABLE` | Stores per-user managed wallets | `connectedAddress` (HASH)     |
 
 **Usage:**
 
@@ -105,13 +105,13 @@ pnpm tsx scripts/create-dynamo-tables.ts
 
 **Required `.env` variables:**
 
-| Variable                  | Description                          |
-|---------------------------|--------------------------------------|
-| `AWS_ACCESS_KEY_ID`       | AWS credentials                      |
-| `AWS_SECRET_ACCESS_KEY`   | AWS credentials                      |
-| `DYNAMODB_REGION`         | e.g. `us-east-1`                     |
-| `DYNAMODB_HISTORY_TABLE`  | Table name for history records       |
-| `DYNAMODB_WALLETS_TABLE`  | Table name for managed wallets       |
+| Variable                 | Description                    |
+| ------------------------ | ------------------------------ |
+| `AWS_ACCESS_KEY_ID`      | AWS credentials                |
+| `AWS_SECRET_ACCESS_KEY`  | AWS credentials                |
+| `DYNAMODB_REGION`        | e.g. `us-east-1`               |
+| `DYNAMODB_HISTORY_TABLE` | Table name for history records |
+| `DYNAMODB_WALLETS_TABLE` | Table name for managed wallets |
 
 ---
 

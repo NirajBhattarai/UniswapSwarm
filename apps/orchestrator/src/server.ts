@@ -1205,7 +1205,9 @@ export function createServer(
       const body = req.body as { amount?: unknown };
       const amount = Number(body.amount);
       if (!Number.isFinite(amount) || amount <= 0) {
-        res.status(400).json({ error: "amount must be a positive number (OG)" });
+        res
+          .status(400)
+          .json({ error: "amount must be a positive number (OG)" });
         return;
       }
       try {
@@ -1213,7 +1215,9 @@ export function createServer(
         const { ZGCompute } = await import("@swarm/compute");
         const privateKey = await getManagedPrivateKey(connectedAddress);
         if (!privateKey) {
-          res.status(404).json({ error: "No managed wallet found for this address" });
+          res
+            .status(404)
+            .json({ error: "No managed wallet found for this address" });
           return;
         }
         const compute = new ZGCompute(privateKey);

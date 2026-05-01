@@ -128,9 +128,7 @@ async function ensureWalletsTable(): Promise<void> {
         AttributeDefinitions: [
           { AttributeName: "connectedAddress", AttributeType: "S" },
         ],
-        KeySchema: [
-          { AttributeName: "connectedAddress", KeyType: "HASH" },
-        ],
+        KeySchema: [{ AttributeName: "connectedAddress", KeyType: "HASH" }],
       }),
     );
     console.log(`  Waiting for "${name}" to become ACTIVE …`);
