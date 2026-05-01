@@ -1,7 +1,7 @@
 import { COINGECKO_API_BASE_URL, getConfig, logger } from "@swarm/shared";
 import type { Impit } from "impit";
 
-import { NARRATIVE_EXTRA_SYMBOLS, NARRATIVE_KEYWORDS } from "../core/constants";
+import { NARRATIVE_KEYWORDS } from "../core/constants";
 import type { NarrativeSignal, NarrativeType } from "../core/types";
 
 export async function fetchNarrativeSignal(
@@ -33,7 +33,6 @@ export async function fetchNarrativeSignal(
     trendingTokens: trending,
     fearGreedValue: fearGreed.score,
     fearGreedLabel: fearGreed.label,
-    extraSymbols: NARRATIVE_EXTRA_SYMBOLS[winnerNarrative] ?? [],
   };
 }
 

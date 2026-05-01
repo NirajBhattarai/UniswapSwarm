@@ -1,12 +1,15 @@
 import { COINGECKO_API_BASE_URL, getConfig, logger } from "@swarm/shared";
 
-import { SYMBOL_TO_COINGECKO_ID } from "../core/constants";
+import { SYMBOL_TO_TOKEN } from "../core/constants";
 import type { CoinGeckoMarketData } from "../core/types";
 
 /**
- * @param symbols  Token symbols to look up via the static SYMBOL_TO_COINGECKO_ID map
- * @param extraIds Additional symbol→coinGeckoId mappings for dynamically discovered tokens
- *                 (e.g. live-trending tokens whose IDs are returned by the CoinGecko trending API)
+ * Fetches CoinGecko market data without any hardcoded ID map.
+ *
+ * - Registered tokens (present in SYMBOL_TO_TOKEN): queried by Ethereum contract
+ *   address via /simple/token_price/ethereum — no ID mapping needed.
+ * - Dynamic trending tokens supplied via extraIds (symbol → CoinGecko ID from the
+ *   trending API): queried via /coins/markets?ids=…
  */
 export async function fetchCoinGeckoMarketData(
   symbols: string[],
@@ -16,85 +19,102 @@ export async function fetchCoinGeckoMarketData(
   const result = new Map<string, CoinGeckoMarketData>();
 
   if (!COINGECKO_API_KEY) {
-    logger.debug(
-      "[Researcher] No COINGECKO_API_KEY set - skipping market data",
-    );
+    logger.debug("[Researcher] No COINGECKO_API_KEY set - skipping market data");
     return result;
   }
 
-  // id → symbol(s) mapping — start with statically known tokens
-  const idToSymbols = new Map<string, string[]>();
+  const keyQuery = `x_cg_demo_api_key=${encodeURIComponent(COINGECKO_API_KEY)}`;
+  const headers = { Accept: "application/json" };
+
+  // ── Path 1: registered tokens — query by contract address ────────────────
+  const addressToSymbol = new Map<string, string>();
   for (const sym of symbols) {
-    const id = SYMBOL_TO_COINGECKO_ID[sym.toUpperCase()];
-    if (!id) continue;
-    const existing = idToSymbols.get(id) ?? [];
-    existing.push(sym.toUpperCase());
-    idToSymbols.set(id, existing);
+    const def = SYMBOL_TO_TOKEN[sym.toUpperCase()];
+    if (def) addressToSymbol.set(def.address.toLowerCase(), sym.toUpperCase());
   }
 
-  // Merge dynamic IDs (from live trending) so those tokens get market data
-  if (extraIds) {
+  if (addressToSymbol.size > 0) {
+    const addresses = Array.from(addressToSymbol.keys()).join(",");
+    const url =
+      `${COINGECKO_API_BASE_URL}/simple/token_price/ethereum` +
+      `?contract_addresses=${addresses}&vs_currencies=usd` +
+      `&include_market_cap=true&include_24hr_vol=true&include_24hr_change=true&${keyQuery}`;
+    try {
+      const res = await fetch(url, { headers });
+      if (res.ok) {
+        const data = (await res.json()) as Record<
+          string,
+          {
+            usd?: number;
+            usd_market_cap?: number;
+            usd_24h_vol?: number;
+            usd_24h_change?: number;
+          }
+        >;
+        for (const [address, prices] of Object.entries(data)) {
+          const sym = addressToSymbol.get(address.toLowerCase());
+          if (!sym) continue;
+          result.set(sym, {
+            symbol: sym,
+            price_usd: prices.usd ?? 0,
+            market_cap_usd: prices.usd_market_cap ?? 0,
+            volume_24h_usd: prices.usd_24h_vol ?? 0,
+            price_change_24h_pct: prices.usd_24h_change ?? 0,
+          });
+          logger.debug(
+            `[Researcher] CoinGecko ${sym}: $${prices.usd} vol=$${((prices.usd_24h_vol ?? 0) / 1e6).toFixed(1)}M`,
+          );
+        }
+      } else {
+        logger.warn(`[Researcher] CoinGecko token_price ${res.status}: ${await res.text()}`);
+      }
+    } catch (err) {
+      logger.warn(`[Researcher] CoinGecko token_price fetch error: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  // ── Path 2: trending tokens with CoinGecko IDs — query by ID ─────────────
+  if (extraIds && extraIds.size > 0) {
+    const idToSymbol = new Map<string, string>();
     for (const [sym, id] of extraIds) {
-      if (!id) continue;
-      const existing = idToSymbols.get(id) ?? [];
-      if (!existing.includes(sym.toUpperCase())) {
-        existing.push(sym.toUpperCase());
+      if (id && !result.has(sym.toUpperCase())) {
+        idToSymbol.set(id, sym.toUpperCase());
       }
-      idToSymbols.set(id, existing);
+    }
+    if (idToSymbol.size > 0) {
+      const ids = Array.from(idToSymbol.keys()).join(",");
+      const url =
+        `${COINGECKO_API_BASE_URL}/coins/markets?vs_currency=usd&ids=${ids}` +
+        `&order=market_cap_desc&per_page=50&page=1&price_change_percentage=24h&${keyQuery}`;
+      try {
+        const res = await fetch(url, { headers });
+        if (res.ok) {
+          const coins = (await res.json()) as Array<{
+            id: string;
+            symbol: string;
+            current_price: number;
+            total_volume: number;
+            price_change_percentage_24h: number;
+            market_cap: number;
+          }>;
+          for (const coin of coins) {
+            const sym = idToSymbol.get(coin.id);
+            if (!sym) continue;
+            result.set(sym, {
+              symbol: sym,
+              price_usd: coin.current_price,
+              volume_24h_usd: coin.total_volume,
+              price_change_24h_pct: coin.price_change_percentage_24h,
+              market_cap_usd: coin.market_cap,
+            });
+          }
+        }
+      } catch (err) {
+        logger.warn(`[Researcher] CoinGecko markets (trending) fetch error: ${err instanceof Error ? err.message : String(err)}`);
+      }
     }
   }
 
-  if (idToSymbols.size === 0) return result;
-
-  const ids = Array.from(idToSymbols.keys()).join(",");
-  const url = `${COINGECKO_API_BASE_URL}/coins/markets?vs_currency=usd&ids=${ids}&order=market_cap_desc&per_page=50&page=1&price_change_percentage=24h&x_cg_demo_api_key=${COINGECKO_API_KEY}`;
-
-  try {
-    const res = await fetch(url, {
-      headers: { Accept: "application/json" },
-    });
-
-    if (!res.ok) {
-      logger.warn(
-        `[Researcher] CoinGecko API ${res.status}: ${await res.text()}`,
-      );
-      return result;
-    }
-
-    const coins = (await res.json()) as Array<{
-      id: string;
-      symbol: string;
-      current_price: number;
-      total_volume: number;
-      price_change_percentage_24h: number;
-      market_cap: number;
-    }>;
-
-    for (const coin of coins) {
-      const syms = idToSymbols.get(coin.id) ?? [];
-      const data: CoinGeckoMarketData = {
-        symbol: coin.symbol.toUpperCase(),
-        price_usd: coin.current_price,
-        volume_24h_usd: coin.total_volume,
-        price_change_24h_pct: coin.price_change_percentage_24h,
-        market_cap_usd: coin.market_cap,
-      };
-      for (const sym of syms) {
-        result.set(sym, data);
-      }
-      logger.debug(
-        `[Researcher] CoinGecko ${coin.symbol.toUpperCase()}: $${coin.current_price} vol=$${(coin.total_volume / 1e6).toFixed(1)}M`,
-      );
-    }
-
-    logger.info(
-      `[Researcher] CoinGecko market data fetched for ${result.size} tokens`,
-    );
-  } catch (err) {
-    logger.warn(
-      `[Researcher] CoinGecko fetch error: ${err instanceof Error ? err.message : String(err)}`,
-    );
-  }
-
+  logger.info(`[Researcher] CoinGecko market data fetched for ${result.size} tokens`);
   return result;
 }

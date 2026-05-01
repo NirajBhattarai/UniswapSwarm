@@ -1,7 +1,6 @@
 import { UNISWAP_TRADE_API_BASE_URL, getConfig, logger } from "@swarm/shared";
 
 import {
-  NARRATIVE_EXTRA_SYMBOLS,
   QUERY_PAIRS,
   QUOTE_SWAPPER_ADDRESS,
   SYMBOL_TO_TOKEN,
@@ -28,20 +27,15 @@ export interface OnChainPoolsResult {
 }
 
 /**
- * Builds QueryPairs for every token that appears in any narrative's extra-symbols
- * list AND is registered in SYMBOL_TO_TOKEN (known mainnet address + decimals).
- * Filters out symbols already covered by the static QUERY_PAIRS set.
+ * Builds QueryPairs for every token in SYMBOL_TO_TOKEN that isn't already
+ * covered by the static QUERY_PAIRS set — no hardcoded per-narrative lists.
  */
 function buildNarrativeExtraPairs(knownSymbols: Set<string>): QueryPair[] {
-  const allNarrativeSymbols = new Set(
-    Object.values(NARRATIVE_EXTRA_SYMBOLS).flat(),
-  );
   const pairs: QueryPair[] = [];
 
-  for (const symbol of allNarrativeSymbols) {
+  for (const [symbol, def] of Object.entries(SYMBOL_TO_TOKEN)) {
     if (knownSymbols.has(symbol)) continue;
-    const def = SYMBOL_TO_TOKEN[symbol];
-    if (!def) continue; // unknown token — skip
+    if (BASE_SYMBOLS.has(symbol) || STABLE_SYMBOLS.has(symbol)) continue;
 
     const amountIn = (10n ** BigInt(def.decimals)).toString();
     pairs.push({
@@ -60,7 +54,7 @@ function buildNarrativeExtraPairs(knownSymbols: Set<string>): QueryPair[] {
       amountIn,
       priceLabel: `WETH per ${symbol}`,
     });
-    logger.debug(`[Researcher] Narrative extra pair queued: ${symbol} vs WETH`);
+    logger.debug(`[Researcher] Extra pair queued: ${symbol} vs WETH`);
   }
 
   return pairs;
@@ -86,11 +80,11 @@ export async function fetchOnChainPools(): Promise<OnChainPoolsResult> {
   // Symbols already covered so we can deduplicate
   const existingSymbols = new Set(snapshots.map((s) => s.tokenSymbol));
 
-  // Add narrative extra tokens (uses known SYMBOL_TO_TOKEN registry — no RPC call)
+  // Add extra tokens from registry not yet covered
   const narrativePairs = buildNarrativeExtraPairs(existingSymbols);
   if (narrativePairs.length > 0) {
     logger.info(
-      `[Researcher] Fetching ${narrativePairs.length} narrative extra pair(s): ${narrativePairs.map((p) => p.tokenIn.symbol).join(", ")}`,
+      `[Researcher] Fetching ${narrativePairs.length} extra pair(s): ${narrativePairs.map((p) => p.tokenIn.symbol).join(", ")}`,
     );
     const narrativeSnapshots = await fetchPoolSnapshots(
       UNISWAP_API_KEY,
@@ -328,8 +322,19 @@ export function populateLiquidityUSD(
 
   for (const s of snapshots) {
     const basePriceUSD = resolveBaseTokenPriceUSD(s.baseTokenSymbol, wethUSD);
-    const estimated =
+    let estimated =
       basePriceUSD > 0 ? Math.round(s.virtualToken1 * basePriceUSD * 2) : 0;
+
+    // When the Uniswap API returned a UniswapX / non-classic route the pool has
+    // liquidity=0 so virtualToken1=0 and estimated=0.  Fall back to a CoinGecko
+    // market-cap-based floor (0.5 % of market cap) so focus tokens are not
+    // silently filtered out by the liquidityUSD >= minLiquidityUSD threshold.
+    if (estimated === 0) {
+      const cg = marketData?.get(s.tokenSymbol);
+      if (cg?.market_cap_usd && cg.market_cap_usd > 0) {
+        estimated = Math.round(cg.market_cap_usd * 0.005);
+      }
+    }
 
     const mktCap = marketData?.get(s.tokenSymbol)?.market_cap_usd;
     s.liquidityUSD = normalizeLiquidityUSD(estimated, mktCap);

@@ -12,6 +12,7 @@ type CoinGeckoSearchResponse = {
 
 const GOAL_FOCUS_CATEGORY: Partial<Record<GoalFocus, string>> = {
   l2: "layer-2",
+  ai: "artificial-intelligence",
   defi: "decentralized-finance-defi",
   staking: "liquid-staking-tokens",
   safe_haven: "wrapped-tokens",
