@@ -8,6 +8,21 @@ importers:
 
   .:
     devDependencies:
+      '@0glabs/0g-serving-broker':
+        specifier: ^0.7.5
+        version: 0.7.5(@types/circomlibjs@0.1.6)(@types/crypto-js@4.2.2)(circomlibjs@0.1.7(bufferutil@4.1.0)(utf-8-validate@5.0.10))(crypto-js@4.2.0)(ethers@6.16.0(bufferutil@4.1.0)(utf-8-validate@5.0.10))
+      '@swarm/shared':
+        specifier: workspace:*
+        version: link:packages/shared
+      '@types/node':
+        specifier: ^20.0.0
+        version: 20.19.39
+      dotenv:
+        specifier: ^16.0.0
+        version: 16.6.1
+      ethers:
+        specifier: ^6.13.2
+        version: 6.16.0(bufferutil@4.1.0)(utf-8-validate@5.0.10)
       prettier:
         specifier: ^3.7.4
         version: 3.7.4
