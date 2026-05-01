@@ -22,13 +22,11 @@ import {
   SYMBOL_TO_TOKEN,
   ADDRESS_TO_SYMBOL,
   USDC_DEF,
-  SYMBOL_TO_COINGECKO_ID,
   SYSTEM_PROMPT,
 } from "./core";
 import {
   fetchCoinGeckoMarketData as fetchCoinGeckoMarketDataService,
   fetchDefiLlamaHistoricalChanges,
-  fetchGoalFocusSymbols,
   fetchNarrativeSignal,
   fetchOnChainPools,
   populateLiquidityUSD,
@@ -87,118 +85,42 @@ export class ResearchAgent {
 
   /**
    * Researcher runs FIRST in the pipeline — before the Planner.
-   * It fetches live on-chain data and writes the report to shared 0G memory.
-   * The Planner then reads this report via contextFor() and uses it to plan.
+   * It builds a unified token feed, calls the LLM once, then post-validates.
    *
-   * @param walletAddress Optional Ethereum address — when provided, the agent fetches
-   *                      all ERC-20 + native ETH balances for the wallet, enriches
-   *                      each holding with USD value, and advises on each position.
+   * Flow:
+   *   buildTokenFeed() → walletHoldings (optional) → LLM inference
+   *   → postValidate → filterByLiquidity → memory.write
    */
   async run(
     goal: string,
     opts: InferOptions = {},
     walletAddress?: string,
   ): Promise<ResearchReport> {
-    logger.info(
-      `[Researcher] Fetching Uniswap multi-protocol pool data via Uniswap Trading API…`,
-    );
+    // ── 1. Single tool: build complete token feed ──────────────────────────
+    const { snapshots, marketData, narrativeSignal } =
+      await this.buildTokenFeed();
 
-    // Fetch pools first so we can reuse its CoinGecko trending list and avoid
-    // a duplicate /search/trending API call inside narrativeSignal.
-    const poolsResult = await fetchOnChainPools();
-    const {
-      snapshots: pools,
-      trendingCoinGeckoIds,
-      trendingSymbols,
-    } = poolsResult;
-    // Build address-by-symbol map for DeFi Llama from pool snapshots + known registry.
-    // Done here so the DeFi Llama fetch can run in parallel with narrativeSignal.
-    const addressBySymbol = new Map<string, string>();
-    for (const pool of pools) {
-      const sym = pool.tokenSymbol.toUpperCase();
-      if (!addressBySymbol.has(sym)) {
-        addressBySymbol.set(sym, pool.tokenAddress);
-      }
-    }
-    for (const [sym, def] of Object.entries(SYMBOL_TO_TOKEN)) {
-      if (!addressBySymbol.has(sym)) {
-        addressBySymbol.set(sym, def.address);
-      }
-    }
-
-    // Fetch narrative signal + DeFi Llama historical changes in parallel
-    const [narrativeSignal, historicalChanges] = await Promise.all([
-      fetchNarrativeSignal(this.browser, trendingSymbols),
-      fetchDefiLlamaHistoricalChanges(addressBySymbol),
-    ]);
-    logger.info(
-      `[Researcher] Fetched ${pools.length} pools | narrative=${narrativeSignal.narrative} fearGreed=${narrativeSignal.fearGreedValue} trending=[${narrativeSignal.trendingTokens.join(",")}] | DeFi Llama history=${historicalChanges.size} tokens`,
-    );
-
-    // Fetch market data for all known symbols + trending tokens (using live CoinGecko IDs
-    // so we don't miss tokens absent from the static SYMBOL_TO_COINGECKO_ID map)
-    const allSymbols = [
-      ...Object.keys(SYMBOL_TO_COINGECKO_ID),
-      ...narrativeSignal.extraSymbols,
-    ];
-    const marketData = await fetchCoinGeckoMarketDataService(
-      allSymbols,
-      trendingCoinGeckoIds,
-    );
-
-    // Merge DeFi Llama 7d/30d historical changes into market data
-    for (const [sym, hist] of historicalChanges) {
-      const existing = marketData.get(sym);
-      if (existing) {
-        existing.price_change_7d_pct = hist.price_change_7d_pct;
-        existing.price_change_30d_pct = hist.price_change_30d_pct;
-      }
-    }
-
-    // Populate liquidityUSD now that market cap data is available for sanity-capping.
-    // Uniswap V3's L×√P formula inflates virtual reserves for concentrated positions;
-    // capping at 2% of market cap keeps pool rankings meaningful.
-    populateLiquidityUSD(pools, marketData);
-    pools.sort((a, b) => b.liquidityUSD - a.liquidityUSD);
-
-    const cfg = getConfig();
-    const context = this.memory.contextFor(ResearchAgent.MEMORY_KEY);
-    const marketDataText = buildMarketDataText(marketData);
-    const narrativeText = buildNarrativeText(narrativeSignal);
-
-    // Fetch wallet holdings when a wallet address is provided.
-    // This runs after marketData is ready so we can price each holding.
+    // ── 2. Wallet holdings (optional) ─────────────────────────────────────
     let walletHoldings: WalletHolding[] | undefined;
     if (walletAddress) {
       try {
-        walletHoldings = await this.fetchWalletHoldings(
-          walletAddress,
-          marketData,
-        );
-        // Persist holdings to shared memory so Strategy / Critic can read them.
-        await this.memory.write(
-          "researcher/wallet_holdings",
-          this.id,
-          this.role,
-          walletHoldings,
-        );
-        logger.info(
-          `[Researcher] Wallet ${walletAddress}: ${walletHoldings.length} non-dust holding(s) found`,
-        );
+        walletHoldings = await this.fetchWalletHoldings(walletAddress, marketData);
+        await this.memory.write("researcher/wallet_holdings", this.id, this.role, walletHoldings);
+        logger.info(`[Researcher] Wallet ${walletAddress}: ${walletHoldings.length} non-dust holding(s) found`);
       } catch (err) {
-        logger.warn(
-          `[Researcher] Could not fetch wallet holdings: ${err instanceof Error ? err.message : String(err)}`,
-        );
+        logger.warn(`[Researcher] Could not fetch wallet holdings: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
 
+    // ── 3. LLM inference — LLM selects and ranks from the feed ────────────
+    const cfg = getConfig();
     const userPrompt = buildResearchPrompt({
       goal,
       cfg,
-      pools,
-      marketDataText,
-      narrativeText,
-      context,
+      pools: snapshots,
+      marketDataText: buildMarketDataText(marketData),
+      narrativeText: buildNarrativeText(narrativeSignal),
+      context: this.memory.contextFor(ResearchAgent.MEMORY_KEY),
       ...(walletHoldings ? { walletHoldings } : {}),
     });
 
@@ -210,58 +132,99 @@ export class ResearchAgent {
 
     report.timestamp = Date.now();
     report.dataSource = "uniswap-multi-protocol";
+    if (walletHoldings) report.walletHoldings = walletHoldings;
 
-    // Attach on-chain holdings to the report (authoritative — not LLM-generated)
-    if (walletHoldings) {
-      report.walletHoldings = walletHoldings;
+    // ── 4. Post-validate and filter ────────────────────────────────────────
+    enrichCandidatesWithMarketData(report.candidates, marketData);
+    report.candidates = this.postValidateCandidates(report.candidates, snapshots, marketData);
+    report.candidates = filterCandidatesByLiquidity(report.candidates, cfg.MIN_LIQUIDITY_USD);
+
+    await this.memory.write(ResearchAgent.MEMORY_KEY, this.id, this.role, report);
+    logger.info(`[Researcher] Saved ${report.candidates.length} candidates to shared memory`);
+    return report;
+  }
+
+  /**
+   * Builds a complete, unified token feed:
+   *  - All pools from Uniswap Trading API (static pairs + trending + registry extras)
+   *  - Narrative signal (Reddit, news, Fear & Greed, CoinGecko trending)
+   *  - CoinGecko market data via contract addresses — no hardcoded ID map
+   *  - DeFi Llama 7d/30d price changes merged in
+   *  - Synthetic snapshots for registered tokens with CoinGecko data but no
+   *    classic Uniswap pool (e.g. UniswapX-routed tokens like ARB, STRK)
+   *
+   * Returns everything the LLM needs to select and rank candidates.
+   */
+  private async buildTokenFeed(): Promise<{
+    snapshots: PoolSnapshot[];
+    marketData: Map<string, CoinGeckoMarketData>;
+    narrativeSignal: import("./core").NarrativeSignal;
+  }> {
+    const { snapshots, trendingCoinGeckoIds, trendingSymbols } =
+      await fetchOnChainPools();
+
+    // Address map for DeFi Llama — pool tokens + full registry
+    const addressBySymbol = new Map<string, string>(
+      snapshots.map((s) => [s.tokenSymbol.toUpperCase(), s.tokenAddress]),
+    );
+    for (const [sym, def] of Object.entries(SYMBOL_TO_TOKEN)) {
+      if (!addressBySymbol.has(sym)) addressBySymbol.set(sym, def.address);
     }
 
-    enrichCandidatesWithMarketData(report.candidates, marketData);
-    report.candidates = this.postValidateCandidates(
-      report.candidates,
-      pools,
-      marketData,
-    );
-    report.candidates = filterCandidatesByLiquidity(
-      report.candidates,
-      cfg.MIN_LIQUIDITY_USD,
-    );
+    // Parallel: narrative signal + DeFi Llama + CoinGecko market data
+    const [narrativeSignal, historicalChanges, marketData] = await Promise.all([
+      fetchNarrativeSignal(this.browser, trendingSymbols),
+      fetchDefiLlamaHistoricalChanges(addressBySymbol),
+      fetchCoinGeckoMarketDataService(Object.keys(SYMBOL_TO_TOKEN), trendingCoinGeckoIds),
+    ]);
 
-    // Fallback: if the LLM returned fewer than 3 candidates, top up from the
-    // highest-liquidity non-stablecoin pools that aren't already in the list.
-    if (report.candidates.length < 3) {
-      report.candidates = this.topUpCandidates(
-        report.candidates,
-        pools,
-        marketData,
-        cfg.MIN_LIQUIDITY_USD,
-        3,
+    // Merge 7d/30d historical price changes into market data
+    for (const [sym, hist] of historicalChanges) {
+      const existing = marketData.get(sym);
+      if (existing) {
+        existing.price_change_7d_pct = hist.price_change_7d_pct;
+        existing.price_change_30d_pct = hist.price_change_30d_pct;
+      }
+    }
+
+    // Populate liquidityUSD (includes market-cap floor for UniswapX-routed tokens)
+    populateLiquidityUSD(snapshots, marketData);
+
+    // Synthetic snapshots: registered tokens with CoinGecko market data but no
+    // classic Uniswap pool — use 0.5% of market cap as a conservative liquidity proxy
+    const pooledSymbols = new Set(snapshots.map((s) => s.tokenSymbol.toUpperCase()));
+    for (const [sym, def] of Object.entries(SYMBOL_TO_TOKEN)) {
+      if (pooledSymbols.has(sym)) continue;
+      if (isStablecoin({ symbol: sym, address: def.address })) continue;
+      const cg = marketData.get(sym);
+      if (!cg?.market_cap_usd || cg.market_cap_usd <= 0) continue;
+      const syntheticLiquidity = Math.round(cg.market_cap_usd * 0.005);
+      snapshots.push({
+        poolAddress: def.address,
+        tokenAddress: def.address,
+        tokenSymbol: sym,
+        tokenName: sym,
+        baseTokenSymbol: "WETH",
+        baseTokenAddress: SYMBOL_TO_TOKEN["WETH"]?.address ?? "",
+        protocol: "synthetic",
+        feePct: 0.3,
+        priceLabel: `USD per ${sym}`,
+        currentPrice: cg.price_usd ?? 0,
+        virtualToken1: 0,
+        liquidityUSD: syntheticLiquidity,
+        liquidityRaw: "0",
+        tick: 0,
+      });
+      logger.info(
+        `[Researcher] Feed: synthetic ${sym} liquidityUSD=$${syntheticLiquidity.toLocaleString()} (no classic pool)`,
       );
     }
 
-    const goalFocus = this.detectGoalFocus(goal);
-    const focusSymbolsDynamic = goalFocus
-      ? await fetchGoalFocusSymbols(goalFocus)
-      : [];
-    report.candidates = this.applyGoalAwareOrdering(
-      report.candidates,
-      pools,
-      marketData,
-      cfg.MIN_LIQUIDITY_USD,
-      goalFocus,
-      focusSymbolsDynamic,
-    );
-
-    await this.memory.write(
-      ResearchAgent.MEMORY_KEY,
-      this.id,
-      this.role,
-      report,
-    );
+    snapshots.sort((a, b) => b.liquidityUSD - a.liquidityUSD);
     logger.info(
-      `[Researcher] Saved ${report.candidates.length} candidates to shared memory`,
+      `[Researcher] Token feed ready: ${snapshots.length} tokens | narrative=${narrativeSignal.narrative} fearGreed=${narrativeSignal.fearGreedValue} trending=[${narrativeSignal.trendingTokens.join(",")}]`,
     );
-    return report;
+    return { snapshots, marketData, narrativeSignal };
   }
 
   /**
@@ -673,194 +636,6 @@ export class ResearchAgent {
     }
 
     return validated;
-  }
-
-  /**
-   * Top-up candidates to `target` count using the highest-liquidity non-stablecoin
-   * pools not already present in the current candidate list.
-   */
-  private topUpCandidates(
-    existing: TokenCandidate[],
-    pools: PoolSnapshot[],
-    marketData: Map<string, CoinGeckoMarketData>,
-    minLiquidityUSD: number,
-    target: number,
-  ): TokenCandidate[] {
-    if (existing.length >= target) return existing;
-
-    const seenSymbols = new Set(existing.map((c) => c.symbol.toUpperCase()));
-    const sorted = [...pools]
-      .filter(
-        (p) =>
-          p.liquidityUSD >= minLiquidityUSD &&
-          !isStablecoin({ symbol: p.tokenSymbol, address: p.tokenAddress }),
-      )
-      .sort((a, b) => b.liquidityUSD - a.liquidityUSD);
-
-    const filled = [...existing];
-    for (const pool of sorted) {
-      if (filled.length >= target) break;
-      const sym = pool.tokenSymbol.toUpperCase();
-      if (seenSymbols.has(sym)) continue;
-      seenSymbols.add(sym);
-
-      const cg = marketData.get(sym);
-      filled.push({
-        address: this.toChecksumSafe(
-          SYMBOL_TO_TOKEN[sym]?.address ?? pool.tokenAddress,
-        ),
-        symbol: sym,
-        name: pool.tokenName || sym,
-        pairAddress: this.toChecksumSafe(pool.poolAddress),
-        baseToken: pool.baseTokenSymbol,
-        priceUSD: cg?.price_usd ?? pool.currentPrice,
-        liquidityUSD: pool.liquidityUSD,
-        volume24hUSD: cg?.volume_24h_usd ?? 0,
-        priceChange24hPct: cg?.price_change_24h_pct ?? 0,
-        poolFeeTier: pool.feePct,
-        txCount: 0,
-      });
-    }
-
-    if (filled.length > existing.length) {
-      logger.info(
-        `[Researcher] Topped up candidates from ${existing.length} → ${filled.length} (fallback pools)`,
-      );
-    }
-
-    return filled;
-  }
-
-  private detectGoalFocus(
-    goal: string,
-  ): "l2" | "ai" | "defi" | "staking" | "safe_haven" | null {
-    const g = goal.toLowerCase();
-    if (/\b(layer[\s-]?2|l2|arbitrum|optimism|polygon|rollup|zk)\b/.test(g)) {
-      return "l2";
-    }
-    if (
-      /\b(ai|artificial intelligence|agentic|machine learning|llm)\b/.test(g)
-    ) {
-      return "ai";
-    }
-    if (/\b(defi|dex|amm|lending|yield)\b/.test(g)) {
-      return "defi";
-    }
-    if (/\b(staking|stake|validator|restaking|lido|rocket pool)\b/.test(g)) {
-      return "staking";
-    }
-    if (/\b(safe haven|defensive|capital preservation|btc|bitcoin)\b/.test(g)) {
-      return "safe_haven";
-    }
-    return null;
-  }
-
-  private applyGoalAwareOrdering(
-    candidates: TokenCandidate[],
-    pools: PoolSnapshot[],
-    marketData: Map<string, CoinGeckoMarketData>,
-    minLiquidityUSD: number,
-    goalFocus: "l2" | "ai" | "defi" | "staking" | "safe_haven" | null,
-    focusSymbolsDynamic: string[],
-  ): TokenCandidate[] {
-    if (!goalFocus) return candidates;
-
-    const focusSymbols = new Set(
-      focusSymbolsDynamic.map((s) => s.toUpperCase()),
-    );
-    if (focusSymbols.size === 0) {
-      logger.info(
-        `[Researcher] Goal focus=${goalFocus} requested but internet symbol discovery returned none; keeping default ordering`,
-      );
-      return candidates;
-    }
-
-    // Ensure focused symbols missing from LLM output are pulled from live pools.
-    const seeded = this.topUpFocusCandidates(
-      candidates,
-      pools,
-      marketData,
-      minLiquidityUSD,
-      focusSymbols,
-    );
-
-    const focused = seeded.filter((c) =>
-      focusSymbols.has(c.symbol.toUpperCase()),
-    );
-    const nonFocused = seeded.filter(
-      (c) => !focusSymbols.has(c.symbol.toUpperCase()),
-    );
-
-    const sortBySafetyUtility = (a: TokenCandidate, b: TokenCandidate) => {
-      // Higher liquidity and volume are safer/useful; lower absolute vol is safer.
-      const liq = b.liquidityUSD - a.liquidityUSD;
-      if (liq !== 0) return liq;
-      const vol = (b.volume24hUSD ?? 0) - (a.volume24hUSD ?? 0);
-      if (vol !== 0) return vol;
-      const av = Math.abs(a.priceChange24hPct ?? 0);
-      const bv = Math.abs(b.priceChange24hPct ?? 0);
-      return av - bv;
-    };
-
-    focused.sort(sortBySafetyUtility);
-    nonFocused.sort(sortBySafetyUtility);
-
-    if (focused.length > 0) {
-      logger.info(
-        `[Researcher] Goal focus=${goalFocus}: prioritizing ${focused.length} focus candidate(s) ahead of ${nonFocused.length} non-focus candidate(s)`,
-      );
-      // Goal-specific asks (e.g. "find L2 tokens") should return focused tokens first.
-      return [...focused, ...nonFocused];
-    }
-
-    logger.info(
-      `[Researcher] Goal focus=${goalFocus} requested but no focus tokens passed validation; returning best available candidates`,
-    );
-    return seeded.sort(sortBySafetyUtility);
-  }
-
-  private topUpFocusCandidates(
-    existing: TokenCandidate[],
-    pools: PoolSnapshot[],
-    marketData: Map<string, CoinGeckoMarketData>,
-    minLiquidityUSD: number,
-    focusSymbols: Set<string>,
-  ): TokenCandidate[] {
-    const seen = new Set(existing.map((c) => c.symbol.toUpperCase()));
-    const filled = [...existing];
-
-    const focusPools = pools
-      .filter((p) => focusSymbols.has(p.tokenSymbol.toUpperCase()))
-      .filter((p) => p.liquidityUSD >= minLiquidityUSD)
-      .filter(
-        (p) =>
-          !isStablecoin({ symbol: p.tokenSymbol, address: p.tokenAddress }),
-      )
-      .sort((a, b) => b.liquidityUSD - a.liquidityUSD);
-
-    for (const pool of focusPools) {
-      const sym = pool.tokenSymbol.toUpperCase();
-      if (seen.has(sym)) continue;
-      seen.add(sym);
-      const cg = marketData.get(sym);
-      filled.push({
-        address: this.toChecksumSafe(
-          SYMBOL_TO_TOKEN[sym]?.address ?? pool.tokenAddress,
-        ),
-        symbol: sym,
-        name: pool.tokenName || sym,
-        pairAddress: this.toChecksumSafe(pool.poolAddress),
-        baseToken: pool.baseTokenSymbol,
-        priceUSD: cg?.price_usd ?? pool.currentPrice,
-        liquidityUSD: pool.liquidityUSD,
-        volume24hUSD: cg?.volume_24h_usd ?? 0,
-        priceChange24hPct: cg?.price_change_24h_pct ?? 0,
-        poolFeeTier: pool.feePct,
-        txCount: 0,
-      });
-    }
-
-    return filled;
   }
 
   private toChecksumSafe(address: string): string {

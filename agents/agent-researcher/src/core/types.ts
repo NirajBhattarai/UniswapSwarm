@@ -107,7 +107,6 @@ export interface NarrativeSignal {
   trendingTokens: string[]; // CoinGecko top-7 trending symbols right now
   fearGreedValue: number; // 0–100 (0=Extreme Fear, 100=Extreme Greed)
   fearGreedLabel: string; // e.g. "Fear", "Greed"
-  extraSymbols: string[]; // symbols to additionally fetch market data for
 }
 
 // ─── CoinGecko market data ────────────────────────────────────────────────────

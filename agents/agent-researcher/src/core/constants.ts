@@ -1,3 +1,8 @@
+import {
+  ETHEREUM_MAINNET_RESEARCHER_TOKEN_REGISTRY,
+  USDC_DEF as SHARED_USDC_DEF,
+  WETH_DEF as SHARED_WETH_DEF,
+} from "@swarm/shared";
 import type { TokenDef, QueryPair, NarrativeType } from "./types";
 
 // ─── Minimal ERC-20 ABI (for resolving unknown addresses) ────────────────────
@@ -24,44 +29,10 @@ export const ERC20_BALANCE_IFACE_ABI = [
 ];
 
 // ─── Canonical token registry (Ethereum mainnet) ─────────────────────────────
-// ETH is treated as WETH for quoting purposes.
+// Sourced from @swarm/shared — ETH is treated as WETH for quoting purposes.
 
-export const SYMBOL_TO_TOKEN: Record<string, TokenDef> = {
-  ETH: { address: "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2", decimals: 18 },
-  WETH: { address: "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2", decimals: 18 },
-  USDC: {
-    address: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
-    decimals: 6,
-    isStablecoin: true,
-  },
-  USDT: {
-    address: "0xdAC17F958D2ee523a2206206994597C13D831ec7",
-    decimals: 6,
-    isStablecoin: true,
-  },
-  DAI: {
-    address: "0x6B175474E89094C44Da98b954EedeAC495271d0F",
-    decimals: 18,
-    isStablecoin: true,
-  },
-  WBTC: { address: "0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599", decimals: 8 },
-  LINK: { address: "0x514910771AF9Ca656af840dff83E8264EcF986CA", decimals: 18 },
-  UNI: { address: "0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984", decimals: 18 },
-  AAVE: { address: "0x7Fc66500c84A76Ad7e9c93437bFc5Ac33E2DDaE9", decimals: 18 },
-  MKR: { address: "0x9f8F72aA9304c8B593d555F12eF6589cC3A579A2", decimals: 18 },
-  CRV: { address: "0xD533a949740bb3306d119CC777fa900bA034cd52", decimals: 18 },
-  // Narrative extra tokens (ai / l2 / staking narratives)
-  GRT: { address: "0xc944E90C64B2c07662A292be6244BDf05Cda44a7", decimals: 18 },
-  ARB: { address: "0xB50721BCf8d664c30412Cfbc6cf7a15145234ad1", decimals: 18 },
-  MATIC: {
-    address: "0x7D1AfA7B718fb893dB30A3aBc0Cfc608AaCfeBB0",
-    decimals: 18,
-  },
-  LDO: { address: "0x5A98FcBEA516Cf06857215779Fd812CA3beF1B32", decimals: 18 },
-  RPL: { address: "0xD33526068D116cE69F19A9ee46F0bd304F21A51f", decimals: 18 },
-  FET: { address: "0xaea46A60368A7bD060eec7DF8CBa43b7EF41Ad85", decimals: 18 },
-  RNDR: { address: "0x6De037ef9aD2725EB40118Bb1702EBb27e4Aeb24", decimals: 18 },
-};
+export const SYMBOL_TO_TOKEN: Record<string, TokenDef> =
+  ETHEREUM_MAINNET_RESEARCHER_TOKEN_REGISTRY as Record<string, TokenDef>;
 
 // Reverse lookup: address (lower-case) → symbol
 export const ADDRESS_TO_SYMBOL: Record<string, string> = Object.fromEntries(
@@ -71,17 +42,8 @@ export const ADDRESS_TO_SYMBOL: Record<string, string> = Object.fromEntries(
   ]),
 );
 
-// Explicit consts ensure non-undefined types even with noUncheckedIndexedAccess
-export const USDC_DEF: TokenDef = {
-  address: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
-  decimals: 6,
-  isStablecoin: true,
-};
-
-export const WETH_DEF: TokenDef = {
-  address: "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
-  decimals: 18,
-};
+export const USDC_DEF: TokenDef = SHARED_USDC_DEF as TokenDef;
+export const WETH_DEF: TokenDef = SHARED_WETH_DEF as TokenDef;
 
 export const FEE_TIERS = [500, 3000, 10_000] as const;
 
@@ -192,31 +154,6 @@ export const QUERY_PAIRS: QueryPair[] = [
   },
 ];
 
-// ─── CoinGecko ID map (symbol → CoinGecko coin id) ───────────────────────────
-
-export const SYMBOL_TO_COINGECKO_ID: Record<string, string> = {
-  ETH: "ethereum",
-  WETH: "ethereum",
-  BTC: "bitcoin",
-  WBTC: "wrapped-bitcoin",
-  USDC: "usd-coin",
-  USDT: "tether",
-  DAI: "dai",
-  LINK: "chainlink",
-  UNI: "uniswap",
-  AAVE: "aave",
-  MKR: "maker",
-  CRV: "curve-dao-token",
-  FET: "fetch-ai",
-  RNDR: "render-token",
-  GRT: "the-graph",
-  ARB: "arbitrum",
-  OP: "optimism",
-  MATIC: "matic-network",
-  LDO: "lido-dao",
-  RPL: "rocket-pool",
-};
-
 // ─── Narrative keyword detection ──────────────────────────────────────────────
 
 export const NARRATIVE_KEYWORDS: Record<NarrativeType, string[]> = {
@@ -288,12 +225,4 @@ export const NARRATIVE_KEYWORDS: Record<NarrativeType, string[]> = {
   neutral: [],
 };
 
-// Top tokens to fetch market data for under each narrative
-export const NARRATIVE_EXTRA_SYMBOLS: Record<NarrativeType, string[]> = {
-  ai: ["FET", "RNDR", "GRT", "LINK"],
-  safe_haven: ["WBTC", "ETH"],
-  defi: ["AAVE", "CRV", "UNI", "MKR"],
-  l2: ["ARB", "OP", "MATIC"],
-  staking: ["LDO", "RPL"],
-  neutral: [],
-};
+
