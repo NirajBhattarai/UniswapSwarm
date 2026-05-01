@@ -68,6 +68,7 @@ export class ZGCompute {
     this.broker = await createZGComputeNetworkBroker(this.wallet);
     const broker = this.broker;
 
+    const cfg = getConfig();
     const services = await broker.inference.listService();
     const chatbots = services.filter(
       (s: { serviceType: string }) => s.serviceType === "chatbot",
@@ -75,13 +76,36 @@ export class ZGCompute {
     if (chatbots.length === 0)
       throw new Error("[Compute] No chatbot services found on 0G network");
 
-    // Some service listings include the endpoint URL directly
-    const chosen = chatbots[0] as {
+    const wantProvider = cfg.ZG_INFERENCE_PROVIDER.trim().toLowerCase();
+    let chosen = chatbots[0] as {
       provider: string;
       model: string;
       url?: string;
       endpoint?: string;
     };
+    if (wantProvider) {
+      const match = chatbots.find(
+        (s: { provider: string }) =>
+          (s.provider as string).toLowerCase() === wantProvider,
+      ) as typeof chosen | undefined;
+      if (match) {
+        chosen = match;
+        logger.info(
+          `[Compute] Using ZG_INFERENCE_PROVIDER=${chosen.provider.slice(0, 14)}…`,
+        );
+      } else {
+        logger.warn(
+          `[Compute] ZG_INFERENCE_PROVIDER not found among chatbots — ` +
+            `using first service. Available: ${chatbots
+              .map((s: { provider: string }) =>
+                (s.provider as string).slice(0, 14),
+              )
+              .join(", ")}`,
+        );
+      }
+    }
+
+    // Some service listings include the endpoint URL directly
     logger.info(
       `[Compute] Provider=${chosen.provider.slice(0, 10)}…  model=${chosen.model}`,
     );
@@ -124,11 +148,16 @@ export class ZGCompute {
       { endpoint: listingEndpoint, model: chosen.model },
     );
 
+    const modelOverride = cfg.ZG_INFERENCE_MODEL.trim();
     this.service = {
       providerAddress: chosen.provider,
       endpoint: meta.endpoint || listingEndpoint,
-      model: meta.model || chosen.model,
+      model: modelOverride || meta.model || chosen.model,
     };
+
+    if (modelOverride) {
+      logger.info(`[Compute] ZG_INFERENCE_MODEL override → ${modelOverride}`);
+    }
 
     logger.info(
       `[Compute] Ready — endpoint=${this.service.endpoint || "(unknown)"}  model=${this.service.model}`,
