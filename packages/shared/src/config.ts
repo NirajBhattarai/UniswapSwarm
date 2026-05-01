@@ -25,6 +25,14 @@ export const SwarmConfigSchema = z.object({
     .string()
     .default("0xbD2C3F0E65eDF5582141C35969d66e205E00C9c8"),
 
+  /**
+   * 0G Compute inference — optional pin for fine-tuned / multi-service setups.
+   * When unset, ZGCompute uses the first chatbot listed on the network.
+   */
+  ZG_INFERENCE_PROVIDER: z.string().default(""),
+  /** Overrides the OpenAI-style `model` field in /chat/completions (e.g. fine-tuned id). */
+  ZG_INFERENCE_MODEL: z.string().default(""),
+
   // Uniswap Trading API (https://developers.uniswap.org/dashboard)
   UNISWAP_API_KEY: z.string().default(""),
 
