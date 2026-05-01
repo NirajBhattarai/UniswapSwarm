@@ -19,6 +19,28 @@ interface ServiceMeta {
   model: string;
 }
 
+/**
+ * Thrown when the 0G Compute ledger balance for a managed wallet drops below
+ * the minimum threshold. The orchestrator surfaces this to the frontend so the
+ * user can top up their managed wallet address.
+ */
+export class LedgerLowError extends Error {
+  constructor(
+    public readonly walletAddress: string,
+    public readonly ledgerBalance: number,
+    public readonly minRequired: number,
+  ) {
+    super(
+      `LEDGER_LOW: 0G Compute ledger for ${walletAddress} has ${ledgerBalance.toFixed(4)} OG` +
+        ` — please deposit ≥${minRequired} OG to your managed wallet to continue.`,
+    );
+    this.name = "LedgerLowError";
+  }
+}
+
+// Minimum ledger OG required before an agent session can start.
+const MIN_LEDGER_OG = 3;
+
 // ─── ZGCompute ─────────────────────────────────────────────────────────────────
 
 /**
@@ -32,10 +54,13 @@ export class ZGCompute {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private broker: any | null = null;
 
-  constructor() {
+  constructor(privateKeyOverride?: string) {
     const cfg = getConfig();
     this.provider = new ethers.JsonRpcProvider(cfg.ZG_CHAIN_RPC);
-    this.wallet = new ethers.Wallet(cfg.ZG_PRIVATE_KEY, this.provider);
+    this.wallet = new ethers.Wallet(
+      privateKeyOverride ?? cfg.ZG_PRIVATE_KEY,
+      this.provider,
+    );
   }
 
   async init(): Promise<void> {
@@ -64,8 +89,8 @@ export class ZGCompute {
       `\n🤖  0G Compute — selected model: \x1b[36m${chosen.model}\x1b[0m  (provider ${chosen.provider.slice(0, 10)}…)\n`,
     );
 
-    // Ensure ledger funded
-    await this.autoFundLedger();
+    // Check ledger balance — throws LedgerLowError if below minimum
+    await this.checkLedger();
 
     // Both acknowledgeProviderSigner and getServiceMetadata can hang — cap each at 8 s
     const withTimeout = <T>(
@@ -113,19 +138,12 @@ export class ZGCompute {
     );
   }
 
-  // ── Smart ledger top-up ──────────────────────────────────────────────────────
+  // ── Ledger balance ───────────────────────────────────────────────────────────
 
-  /**
-   * Checks wallet OG balance and ledger balance, then deposits enough to bring
-   * the ledger to TARGET_OG (default 5), keeping RESERVE_OG (default 1) in wallet.
-   * Safe to call at any time — no-ops if ledger already has enough.
-   */
-  private async autoFundLedger(targetOG = 5, reserveOG = 1): Promise<void> {
+  /** Returns the current 0G Compute ledger balance in OG tokens, or 0 on error. */
+  async getLedgerBalance(): Promise<number> {
     const broker = this.broker;
-    if (!broker) return;
-
-    // Current ledger balance
-    let ledgerBalance = 0;
+    if (!broker) return 0;
     try {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const ledger = await (broker.ledger.getLedger() as Promise<any>);
@@ -135,56 +153,71 @@ export class ZGCompute {
         ledger?.availableBalance ??
         ledger?.[0] ??
         0;
-      ledgerBalance =
-        typeof raw === "bigint"
-          ? parseFloat(ethers.formatEther(raw))
-          : typeof raw === "string"
-            ? parseFloat(ethers.formatEther(BigInt(raw)))
-            : Number(raw);
-      logger.info(`[Compute] Ledger balance: ${ledgerBalance.toFixed(4)} OG`);
+      if (typeof raw === "bigint") return parseFloat(ethers.formatEther(raw));
+      if (typeof raw === "string")
+        return parseFloat(ethers.formatEther(BigInt(raw)));
+      return Number(raw);
     } catch {
-      logger.info("[Compute] No ledger yet — will create one");
-      ledgerBalance = 0;
+      return 0;
     }
+  }
 
-    if (ledgerBalance >= targetOG) {
-      logger.info(`[Compute] Ledger has ${ledgerBalance.toFixed(4)} OG ✓`);
-      return;
+  /**
+   * Checks the ledger balance and throws `LedgerLowError` if below MIN_LEDGER_OG.
+   * Called during `init()` — inference never starts silently with an empty ledger.
+   */
+  private async checkLedger(): Promise<void> {
+    const balance = await this.getLedgerBalance();
+    logger.info(`[Compute] Ledger balance: ${balance.toFixed(4)} OG`);
+    if (balance < MIN_LEDGER_OG) {
+      throw new LedgerLowError(this.wallet.address, balance, MIN_LEDGER_OG);
     }
+    logger.info(`[Compute] Ledger has ${balance.toFixed(4)} OG ✓`);
+  }
 
-    // Wallet balance
-    const walletWei = await this.provider.getBalance(this.wallet.address);
-    const walletBalance = parseFloat(ethers.formatEther(walletWei));
-    logger.info(`[Compute] Wallet balance: ${walletBalance.toFixed(4)} OG`);
-
-    if (walletBalance <= reserveOG) {
-      logger.warn(
-        `[Compute] Wallet balance (${walletBalance.toFixed(4)} OG) is at/below ` +
-          `the ${reserveOG} OG reserve — cannot auto-fund ledger.`,
-      );
-      return;
+  /**
+   * Deposits `amount` OG tokens into this wallet's 0G Compute ledger.
+   * If no ledger exists yet, one is created with the given balance.
+   * The broker must be initialised first (call `init()` before this, or
+   * call this on a freshly-created broker via `_initBrokerOnly()`).
+   *
+   * @param amount - Amount in OG tokens (not wei).
+   */
+  async fundLedger(amount: number): Promise<void> {
+    if (!this.broker) {
+      // Initialise broker without running the ledger check so we can top up
+      // even when the ledger is currently below MIN_LEDGER_OG.
+      await this._initBrokerOnly();
     }
-
-    const shortfall = targetOG - ledgerBalance;
-    const maxCanDeposit = walletBalance - reserveOG;
-    const deposit = Math.min(shortfall, maxCanDeposit);
-    const rounded = Math.floor(deposit * 1e6) / 1e6;
-
-    if (rounded <= 0) {
+    const broker = this.broker!;
+    try {
+      // Try depositing to an existing ledger first.
+      await (broker.ledger.depositFund(amount) as Promise<void>);
       logger.info(
-        `[Compute] Ledger topped up ✓ (~${ledgerBalance.toFixed(4)} OG)`,
+        `[Compute] Deposited ${amount} OG into ledger for ${this.wallet.address}`,
       );
-      return;
+    } catch (depositErr) {
+      // If no ledger exists yet, create one.
+      const msg =
+        depositErr instanceof Error ? depositErr.message : String(depositErr);
+      if (/no ledger|ledger not found|does not exist/i.test(msg)) {
+        logger.info(
+          `[Compute] No ledger found — creating new ledger with ${amount} OG for ${this.wallet.address}`,
+        );
+        await (broker.ledger.addLedger(amount) as Promise<void>);
+      } else {
+        throw depositErr;
+      }
     }
+  }
 
-    logger.info(
-      `[Compute] Depositing ${rounded} OG into ledger ` +
-        `(target=${targetOG}, current=${ledgerBalance.toFixed(4)}, shortfall=${shortfall.toFixed(4)})…`,
-    );
-    await broker.ledger.depositFund(rounded);
-    logger.info(
-      `[Compute] Ledger topped up ✓ (~${(ledgerBalance + rounded).toFixed(4)} OG)`,
-    );
+  /**
+   * Initialises only the broker (no service discovery, no ledger check).
+   * Used internally by `fundLedger()` so we can top up without triggering
+   * the usual `LedgerLowError` gate.
+   */
+  private async _initBrokerOnly(): Promise<void> {
+    this.broker = await createZGComputeNetworkBroker(this.wallet);
   }
 
   // ── Non-streaming inference ─────────────────────────────────────────────────
@@ -209,26 +242,8 @@ export class ZGCompute {
         svc.providerAddress,
       )) as unknown as Record<string, string>;
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      if (
-        msg.toLowerCase().includes("ledger") ||
-        msg.toLowerCase().includes("0g")
-      ) {
-        logger.warn(
-          `[Compute] Ledger error during infer — attempting auto-fund: ${msg}`,
-        );
-        await this.autoFundLedger();
-        await (
-          broker.inference.acknowledgeProviderSigner(
-            svc.providerAddress,
-          ) as Promise<unknown>
-        ).catch(() => null);
-        headers = (await broker.inference.getRequestHeaders(
-          svc.providerAddress,
-        )) as unknown as Record<string, string>;
-      } else {
-        throw err;
-      }
+      // Rethrow — LedgerLowError is handled upstream by the orchestrator.
+      throw err;
     }
 
     const body = JSON.stringify({
@@ -283,26 +298,8 @@ export class ZGCompute {
         svc.providerAddress,
       )) as unknown as Record<string, string>;
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      if (
-        msg.toLowerCase().includes("ledger") ||
-        msg.toLowerCase().includes("0g")
-      ) {
-        logger.warn(
-          `[Compute] Ledger error during inferStream — attempting auto-fund: ${msg}`,
-        );
-        await this.autoFundLedger();
-        await (
-          broker.inference.acknowledgeProviderSigner(
-            svc.providerAddress,
-          ) as Promise<unknown>
-        ).catch(() => null);
-        headers = (await broker.inference.getRequestHeaders(
-          svc.providerAddress,
-        )) as unknown as Record<string, string>;
-      } else {
-        throw err;
-      }
+      // Rethrow — LedgerLowError is handled upstream by the orchestrator.
+      throw err;
     }
 
     const body = JSON.stringify({

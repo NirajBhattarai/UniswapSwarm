@@ -18,11 +18,14 @@ export class ZGStorage {
   private readonly chainRpc: string;
   private ready = false;
 
-  constructor() {
+  constructor(privateKeyOverride?: string) {
     const cfg = getConfig();
     this.chainRpc = cfg.ZG_CHAIN_RPC;
     const provider = new ethers.JsonRpcProvider(cfg.ZG_CHAIN_RPC);
-    this.wallet = new ethers.Wallet(cfg.ZG_PRIVATE_KEY, provider);
+    this.wallet = new ethers.Wallet(
+      privateKeyOverride ?? cfg.ZG_PRIVATE_KEY,
+      provider,
+    );
     this.indexer = new Indexer(cfg.ZG_INDEXER_RPC);
   }
 

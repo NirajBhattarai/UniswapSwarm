@@ -1,2 +1,2 @@
-export { ZGCompute } from "./ZGCompute";
+export { ZGCompute, LedgerLowError } from "./ZGCompute";
 export type { InferOptions } from "./ZGCompute";
