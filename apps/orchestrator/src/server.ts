@@ -14,8 +14,7 @@ import {
   registerSwarmA2AAgentRoutes,
   type AgentExecutionHookParams,
 } from "./a2aAgents";
-
-const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
+import { ZERO_ADDRESS } from "@swarm/shared";
 import { DynamoHistoryStore } from "./historyStore";
 
 // ── SSE helpers ────────────────────────────────────────────────────────────────
@@ -1155,6 +1154,78 @@ export function createServer(
     }
     res.json(latest);
   });
+
+  // ── Managed wallet ledger balance ──────────────────────────────────────────
+  // GET /managed-wallet/:connectedAddress/ledger
+  // Decrypts the user's managed key, opens a broker, and returns the 0G Compute
+  // ledger balance for that wallet. Called server-to-server by the web API.
+  app.get(
+    "/managed-wallet/:connectedAddress/ledger",
+    async (req: Request, res: Response): Promise<void> => {
+      const { connectedAddress } = req.params as { connectedAddress: string };
+      if (!/^0x[0-9a-fA-F]{40}$/.test(connectedAddress)) {
+        res.status(400).json({ error: "Invalid address" });
+        return;
+      }
+      try {
+        const { getManagedPrivateKey } = await import("./managedWallets");
+        const { ZGCompute } = await import("@swarm/compute");
+        const privateKey = await getManagedPrivateKey(connectedAddress);
+        if (!privateKey) {
+          res.json({ ledgerBalance: null, ledgerLow: null });
+          return;
+        }
+        const compute = new ZGCompute(privateKey);
+        // init() creates the broker; we need it to query the ledger
+        await compute.init().catch(() => {
+          /* LedgerLowError is fine here — we still get the balance below */
+        });
+        const ledgerBalance = await compute.getLedgerBalance();
+        res.json({ ledgerBalance, ledgerLow: ledgerBalance < 3 });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        res.status(500).json({ error: msg });
+      }
+    },
+  );
+
+  // ── Fund managed wallet ledger ─────────────────────────────────────────────
+  // POST /managed-wallet/:connectedAddress/fund-ledger
+  // Body: { amount: number }  (OG tokens, e.g. 5)
+  // Deposits the requested amount from the managed wallet into the 0G Compute
+  // ledger (or creates a new ledger if none exists).
+  app.post(
+    "/managed-wallet/:connectedAddress/fund-ledger",
+    async (req: Request, res: Response): Promise<void> => {
+      const { connectedAddress } = req.params as { connectedAddress: string };
+      if (!/^0x[0-9a-fA-F]{40}$/.test(connectedAddress)) {
+        res.status(400).json({ error: "Invalid address" });
+        return;
+      }
+      const body = req.body as { amount?: unknown };
+      const amount = Number(body.amount);
+      if (!Number.isFinite(amount) || amount <= 0) {
+        res.status(400).json({ error: "amount must be a positive number (OG)" });
+        return;
+      }
+      try {
+        const { getManagedPrivateKey } = await import("./managedWallets");
+        const { ZGCompute } = await import("@swarm/compute");
+        const privateKey = await getManagedPrivateKey(connectedAddress);
+        if (!privateKey) {
+          res.status(404).json({ error: "No managed wallet found for this address" });
+          return;
+        }
+        const compute = new ZGCompute(privateKey);
+        await compute.fundLedger(amount);
+        const ledgerBalance = await compute.getLedgerBalance();
+        res.json({ ok: true, ledgerBalance, ledgerLow: ledgerBalance < 3 });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        res.status(500).json({ error: msg });
+      }
+    },
+  );
 
   return app;
 }

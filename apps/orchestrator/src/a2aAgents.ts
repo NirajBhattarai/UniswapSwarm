@@ -19,9 +19,15 @@ import {
 } from "@a2a-js/sdk/server/express";
 import { v4 as uuidv4 } from "uuid";
 import { logger } from "@swarm/shared";
+import { LedgerLowError } from "@swarm/compute";
 import type { SwarmOrchestrator } from "./orchestrator";
-
-const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
+import {
+  getManagedPrivateKey,
+  isManagedWalletFunded,
+} from "./managedWallets";
+import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
+import { DynamoDBDocumentClient, GetCommand } from "@aws-sdk/lib-dynamodb";
+import { ZERO_ADDRESS } from "@swarm/shared";
 
 /**
  * Each Uniswap Swarm agent is exposed as an A2A endpoint on the same port
@@ -137,6 +143,39 @@ export function getSwarmAgentDescriptors(): AgentDescriptor[] {
   return SWARM_AGENT_DESCRIPTORS;
 }
 
+// ── DynamoDB helper (managed wallet address lookup) ──────────────────────────
+
+let _dynamo: DynamoDBDocumentClient | null | undefined;
+
+function getDynamoClient(): DynamoDBDocumentClient | null {
+  if (_dynamo !== undefined) return _dynamo;
+  const region = process.env.DYNAMODB_REGION?.trim();
+  const table = process.env.DYNAMODB_WALLETS_TABLE?.trim();
+  if (!region || !table) {
+    _dynamo = null;
+    return null;
+  }
+  const accessKeyId = process.env.AWS_ACCESS_KEY_ID?.trim();
+  const secretAccessKey = process.env.AWS_SECRET_ACCESS_KEY?.trim();
+  const sessionToken = process.env.AWS_SESSION_TOKEN?.trim() || undefined;
+  const raw = new DynamoDBClient(
+    accessKeyId && secretAccessKey
+      ? {
+          region,
+          credentials: {
+            accessKeyId,
+            secretAccessKey,
+            ...(sessionToken ? { sessionToken } : {}),
+          },
+        }
+      : { region },
+  );
+  _dynamo = DynamoDBDocumentClient.from(raw, {
+    marshallOptions: { removeUndefinedValues: true },
+  });
+  return _dynamo;
+}
+
 // ── Executors ────────────────────────────────────────────────────────────────
 
 /**
@@ -194,6 +233,62 @@ class SwarmAgentExecutor implements AgentExecutor {
     let payload: unknown;
     let runError: string | undefined;
     try {
+      // If the user has a funded managed wallet, bind this session to use
+      // their dedicated ZGCompute + ZGStorage (pays for 0G inference/storage
+      // from the user's wallet rather than the shared operator key).
+      if (walletAddress) {
+        try {
+          const managedKey = await getManagedPrivateKey(walletAddress);
+          if (managedKey) {
+            // Look up the managed address so we can check the balance
+            const dynamo = getDynamoClient();
+            let managedAddress: string | null = null;
+            if (dynamo) {
+              const item = await dynamo
+                .send(
+                  new GetCommand({
+                    TableName:
+                      process.env.DYNAMODB_WALLETS_TABLE?.trim() ?? "",
+                    Key: { connectedAddress: walletAddress.toLowerCase() },
+                  }),
+                )
+                .then((r) => r.Item ?? null)
+                .catch(() => null);
+              managedAddress =
+                (item as { managedAddress?: string } | null)?.managedAddress ??
+                null;
+            }
+            const funded =
+              managedAddress !== null
+                ? await isManagedWalletFunded(managedAddress)
+                : false;
+            if (funded) {
+              await this.orchestrator.ensureManagedSession(
+                sessionId,
+                walletAddress,
+                managedKey,
+              );
+            }
+          }
+        } catch (managedErr) {
+          if (managedErr instanceof LedgerLowError) {
+            // Surface ledger-low as a top-level error so the frontend shows the
+            // deposit prompt instead of silently running without a managed wallet.
+            throw new Error(
+              `Your 0G Compute ledger balance (${managedErr.ledgerBalance.toFixed(4)} OG) is below the ` +
+                `minimum required (${managedErr.minRequired} OG). Please send more A0GI to your ` +
+                `managed wallet to top up the ledger, then try again.`,
+            );
+          }
+          logger.warn(
+            `[A2A] Managed wallet setup skipped for ${walletAddress}: ${
+              managedErr instanceof Error
+                ? managedErr.message
+                : String(managedErr)
+            }`,
+          );
+        }
+      }
       payload = await this.runAgent(userText, sessionId, walletAddress);
     } catch (err) {
       runError = err instanceof Error ? err.message : String(err);

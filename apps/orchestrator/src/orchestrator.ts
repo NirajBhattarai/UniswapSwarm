@@ -1,5 +1,5 @@
 import { v4 as uuidv4 } from "uuid";
-import { ZGCompute } from "@swarm/compute";
+import { ZGCompute, LedgerLowError } from "@swarm/compute";
 import { BlackboardMemory, ZGStorage } from "@swarm/memory";
 import type { InferOptions } from "@swarm/compute";
 import { PlannerAgent } from "@swarm/agent-planner";
@@ -56,6 +56,13 @@ export class SwarmOrchestrator {
   private readonly compute: ZGCompute;
   private readonly zgStorage: ZGStorage;
   private readonly sessionContexts = new Map<string, SessionContext>();
+  // Per-wallet managed compute/storage instances (one per funded user wallet).
+  private readonly managedResources = new Map<
+    string,
+    { compute: ZGCompute; storage: ZGStorage }
+  >();
+  // Sessions that have been bound to a managed wallet's compute/storage.
+  private readonly managedSessions = new Set<string>();
 
   private cycleHistory: SwarmCycleState[] = [];
   private running = false;
@@ -65,29 +72,103 @@ export class SwarmOrchestrator {
     this.zgStorage = new ZGStorage();
   }
 
-  private createSessionContext(sessionId: string): SessionContext {
+  private createSessionContext(
+    sessionId: string,
+    computeOverride?: ZGCompute,
+    storageOverride?: ZGStorage,
+  ): SessionContext {
+    const compute = computeOverride ?? this.compute;
+    const storage = storageOverride ?? this.zgStorage;
     const memory = new BlackboardMemory(
-      this.zgStorage,
+      storage,
       `sessions/${sessionId}`,
     );
     return {
       memory,
-      planner: new PlannerAgent(this.compute, memory),
-      researcher: new ResearchAgent(this.compute, memory),
-      risk: new RiskAgent(this.compute, memory),
-      strategy: new StrategyAgent(this.compute, memory),
-      critic: new CriticAgent(this.compute, memory),
+      planner: new PlannerAgent(compute, memory),
+      researcher: new ResearchAgent(compute, memory),
+      risk: new RiskAgent(compute, memory),
+      strategy: new StrategyAgent(compute, memory),
+      critic: new CriticAgent(compute, memory),
       executor: new ExecutorAgent(memory),
     };
   }
 
-  private getOrCreateSessionContext(sessionId: string): SessionContext {
+  private getOrCreateSessionContext(
+    sessionId: string,
+    computeOverride?: ZGCompute,
+    storageOverride?: ZGStorage,
+  ): SessionContext {
     const existing = this.sessionContexts.get(sessionId);
     if (existing) return existing;
 
-    const created = this.createSessionContext(sessionId);
+    const created = this.createSessionContext(
+      sessionId,
+      computeOverride,
+      storageOverride,
+    );
     this.sessionContexts.set(sessionId, created);
     return created;
+  }
+
+  /**
+   * Bind a session to a specific user's managed wallet before the first agent
+   * runs. Creates (and init()s) a dedicated ZGCompute + ZGStorage instance for
+   * that wallet if one doesn't exist yet. No-ops if the session is already bound.
+   *
+   * @param sessionId       - Session ID extracted from the A2A request.
+   * @param walletAddress   - Connected Reown wallet address (the lookup key).
+   * @param privateKey      - Decrypted managed wallet private key.
+   */
+  async ensureManagedSession(
+    sessionId: string,
+    walletAddress: string,
+    privateKey: string,
+  ): Promise<void> {
+    if (this.managedSessions.has(sessionId)) return;
+    if (this.sessionContexts.has(sessionId)) {
+      // Session was already created before managed wallet was ready; too late
+      // to inject a different compute — mark as managed so we don't retry.
+      this.managedSessions.add(sessionId);
+      return;
+    }
+
+    let resources = this.managedResources.get(walletAddress);
+    if (!resources) {
+      logger.info(
+        `[Orchestrator] Initialising managed ZGCompute + ZGStorage for wallet ${walletAddress}`,
+      );
+      const compute = new ZGCompute(privateKey);
+      const storage = new ZGStorage(privateKey);
+      try {
+        await Promise.all([compute.init(), storage.init()]);
+      } catch (err) {
+        // Surface LedgerLowError to the caller — don't silently fall back,
+        // so the frontend can show the user a topup prompt.
+        if (err instanceof LedgerLowError) throw err;
+        logger.warn(
+          `[Orchestrator] Managed compute/storage init failed for ${walletAddress}: ${
+            err instanceof Error ? err.message : String(err)
+          }. Falling back to shared key.`,
+        );
+        this.managedSessions.add(sessionId);
+        return;
+      }
+      resources = { compute, storage };
+      this.managedResources.set(walletAddress, resources);
+    }
+
+    // Pre-create the session context with the managed compute/storage so
+    // the agents use the user's wallet for 0G inference billing + storage.
+    this.getOrCreateSessionContext(
+      sessionId,
+      resources.compute,
+      resources.storage,
+    );
+    this.managedSessions.add(sessionId);
+    logger.info(
+      `[Orchestrator] Session ${sessionId} bound to managed wallet ${walletAddress}`,
+    );
   }
 
   private async hydrateSessionMemory(
