@@ -429,52 +429,135 @@ Every agent writes its output to the shared `BlackboardMemory`. Each write is si
 
 All six agents share **one `BlackboardMemory` instance** per orchestrator session. The orchestrator constructs it once and injects it into every agent constructor via dependency injection — so every read and write operates on the exact same in-process `Map<string, MemoryEntry>`. There is no network hop or serialisation round-trip between agents within a cycle.
 
-### Data flow
+### Architecture — KV store internals
 
 ```mermaid
-sequenceDiagram
-    autonumber
-    participant O  as Orchestrator
-    participant BB as BlackboardMemory (in-process Map)
-    participant ZG as 0G Storage (async, best-effort)
-    participant R  as Researcher
-    participant P  as Planner
-    participant Ri as Risk
-    participant S  as Strategy
-    participant C  as Critic
-    participant E  as Executor
+flowchart TD
+    subgraph SESSION["Session Context  (one per sessionId)"]
+        direction TB
 
-    O->>BB: new BlackboardMemory(zgStorage, "sessions/<id>")
-    O->>R: new ResearchAgent(memory, …)
-    O->>P: new PlannerAgent(memory)
-    O->>Ri: new RiskAgent(memory, …)
-    O->>S: new StrategyAgent(compute, memory)
-    O->>C: new CriticAgent(memory)
-    O->>E: new ExecutorAgent(memory)
+        subgraph BB["BlackboardMemory  —  in-process Map&lt;string, MemoryEntry&gt;"]
+            direction LR
+            K1["researcher/report\n(ResearchReport)"]
+            K2["researcher/wallet_holdings\n(WalletHolding[])"]
+            K3["planner/plan\n(TradePlan)"]
+            K4["risk/assessments\n(RiskAssessment[])"]
+            K5["strategy/proposal\n(TradeStrategy)"]
+            K6["critic/critique\n(Critique)"]
+            K7["executor/result\n(ExecutionResult)"]
+        end
 
-    Note over O,E: Cycle begins — agents run sequentially
+        subgraph AGENTS["Agents  (share same BB reference)"]
+            R["🔬 Researcher"]
+            P["📋 Planner"]
+            Ri["⚠️ Risk"]
+            S["📈 Strategy"]
+            C["🧐 Critic"]
+            E["⚡ Executor"]
+        end
+    end
 
-    R->>BB: memory.write("researcher/report", …)
-    BB-->>ZG: storage.store("sessions/<id>/researcher/report", …) [async]
-    ZG-->>BB: rootHash (CID)
+    subgraph ZG["0G Network  (async, best-effort)"]
+        ZGS["0G Storage\nJSON blob upload"]
+        ZGH["Root Hash (CID)\nreturned per write"]
+    end
 
-    P->>BB: memory.contextFor("planner/plan")  ← reads Researcher slot
-    P->>BB: memory.write("planner/plan", …)
-    BB-->>ZG: storage.store(…) [async]
+    subgraph UI["UI / Orchestrator"]
+        ORC["SwarmOrchestrator\ncreates BB once, injects into all agents"]
+        STREAM["SSE stream\nreadAll() → client"]
+    end
 
-    Ri->>BB: memory.readValue<ResearchReport>("researcher/report")
-    Ri->>BB: memory.readValue<TradePlan>("planner/plan")
-    Ri->>BB: memory.write("risk/assessments", …)
+    %% Orchestrator wires everything
+    ORC -->|"new BlackboardMemory(zgStorage, 'sessions/<id>')"| BB
+    ORC --> R & P & Ri & S & C & E
 
-    S->>BB: memory.contextFor("strategy/proposal")  ← reads all 3 prior slots
-    S->>BB: memory.write("strategy/proposal", …)
+    %% Sequential write chain (agents run in order)
+    R -->|"write('researcher/report')\nwrite('researcher/wallet_holdings')"| K1 & K2
+    P -->|"contextFor() reads K1\nwrite('planner/plan')"| K1
+    P -->|write| K3
+    Ri -->|"readValue(K1, K3)\nwrite('risk/assessments')"| K1 & K3
+    Ri -->|write| K4
+    S -->|"contextFor() reads K1–K4\nwrite('strategy/proposal')"| K1 & K3 & K4
+    S -->|write| K5
+    C -->|"contextFor() reads K1–K5\nwrite('critic/critique')"| K1 & K3 & K4 & K5
+    C -->|write| K6
+    E -->|"readValue(K5, K6)\nwrite('executor/result')"| K5 & K6
+    E -->|write| K7
 
-    C->>BB: memory.contextFor("critic/critique")  ← reads all 4 prior slots
-    C->>BB: memory.write("critic/critique", …)
+    %% Every write also fans out to 0G async
+    K1 & K2 & K3 & K4 & K5 & K6 & K7 -->|"storage.store()\nsessions/<id>/<key>"| ZGS
+    ZGS --> ZGH
+    ZGH -->|"stored in MemoryEntry.hash"| BB
 
-    E->>BB: memory.readValue<TradeStrategy>("strategy/proposal")
-    E->>BB: memory.readValue<Critique>("critic/critique")
-    E->>BB: memory.write("executor/result", …)
+    %% UI reads
+    BB -->|"readAll() — chronological"| STREAM
+
+    %% Styling
+    style BB fill:#1e293b,stroke:#38bdf8,color:#e2e8f0
+    style AGENTS fill:#0f172a,stroke:#6366f1,color:#e2e8f0
+    style ZG fill:#0f172a,stroke:#22c55e,color:#e2e8f0
+    style SESSION fill:#020617,stroke:#475569,color:#94a3b8
+    style UI fill:#0f172a,stroke:#f59e0b,color:#e2e8f0
+```
+
+### Write lifecycle
+
+```mermaid
+flowchart LR
+    A["Agent calls\nmemory.write(key, …)"] --> B["cache.set(key, entry)\nin-process Map — O(1)"]
+    B --> C{"zgStorage\npresent?"}
+    C -- yes --> D["storage.store()\n0G Storage upload"]
+    D --> E["returns rootHash\n(0G CID)"]
+    E --> F["entry.hash = rootHash"]
+    C -- no / error --> G["computeLocalHash()\nSHA-256 of JSON"]
+    G --> F
+    F --> H["MemoryEntry\n{ key, agentId, role,\n  value, hash, ts }"]
+    H --> I["Next agent reads\nO(1) from same Map"]
+    H --> J["UI stream\nreadAll() → SSE"]
+```
+
+### Agent-to-agent read patterns
+
+```mermaid
+flowchart TD
+    subgraph READS["Two read APIs"]
+        direction LR
+        RV["readValue&lt;T&gt;(key)\n──────────────\nTyped structured access\nReturns value cast to T\nUsed for programmatic logic\ne.g. check critique.approved"]
+        CF["contextFor(excludeKey)\n──────────────\nLLM prompt injection\nFormats ALL prior entries\nas Markdown block\nExcludes own write slot"]
+    end
+
+    K1R["researcher/report"] --> RV & CF
+    K3R["planner/plan"] --> RV & CF
+    K4R["risk/assessments"] --> RV & CF
+    K5R["strategy/proposal"] --> RV & CF
+    K6R["critic/critique"] --> RV
+
+    RV -->|"agent uses value\nin business logic"| BL["if (!critique.approved) return"]
+    CF -->|"appended to\nsystem prompt"| LLM["LLM call\n(Gemini / 0G Compute)"]
+
+    style READS fill:#0f172a,stroke:#6366f1,color:#e2e8f0
+```
+
+### Temporal write order
+
+### Temporal write order
+
+```mermaid
+timeline
+    title Blackboard KV — write timeline within one cycle
+    section t₀ Researcher
+        researcher/report        : ResearchReport — market data, pool snapshots, narrative
+        researcher/wallet_holdings : WalletHolding[] — current portfolio
+    section t₁ Planner
+        planner/plan             : TradePlan — strategy type, constraints, task list
+    section t₂ Risk
+        risk/assessments         : RiskAssessment[] — honeypot, concentration, MEV scores
+    section t₃ Strategy
+        strategy/proposal        : TradeStrategy — exact swap calldata spec
+    section t₄ Critic
+        critic/critique          : Critique — approved flag, confidence, issues list
+    section t₅ Executor
+        executor/result          : ExecutionResult — tx hash or simulation receipt
 ```
 
 ### Key design decisions
