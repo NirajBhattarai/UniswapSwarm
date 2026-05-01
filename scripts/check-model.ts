@@ -647,17 +647,17 @@ async function runInferenceCheck(
 
   // Pick service — prefer same provider as fine-tuning
   const svc = // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  (services.find(
-    (s: any) => s.provider?.toLowerCase() === providerAddr.toLowerCase(),
-  ) ??
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    services.find((s: any) => s.serviceType === "chatbot") ??
-    services[0]) as {
-    provider: string;
-    model?: string;
-    url?: string;
-    endpoint?: string;
-  };
+    (services.find(
+      (s: any) => s.provider?.toLowerCase() === providerAddr.toLowerCase(),
+    ) ??
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      services.find((s: any) => s.serviceType === "chatbot") ??
+      services[0]) as {
+      provider: string;
+      model?: string;
+      url?: string;
+      endpoint?: string;
+    };
 
   console.log(
     `   Provider : ${svc.provider.slice(0, 14)}…  model: ${svc.model ?? "(auto)"}`,

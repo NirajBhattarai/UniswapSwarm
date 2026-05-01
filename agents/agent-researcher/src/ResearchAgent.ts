@@ -20,8 +20,7 @@ import {
   fetchCoinGeckoMarketData as fetchCoinGeckoMarketDataService,
   fetchDefiLlamaHistoricalChanges,
   fetchNarrativeSignal,
-  fetchOnChainPools,
-  populateLiquidityUSD,
+  fetchTrendingTokens,
 } from "./services";
 import {
   buildMarketDataText,
@@ -224,34 +223,41 @@ export class ResearchAgent {
   }
 
   /**
-   * Builds a complete, unified token feed:
-   *  - All pools from Uniswap Trading API (static pairs + trending + registry extras)
-   *  - Narrative signal (Reddit, news, Fear & Greed, CoinGecko trending)
-   *  - CoinGecko market data via contract addresses — no hardcoded ID map
-   *  - DeFi Llama 7d/30d price changes merged in
-   *  - Synthetic snapshots for registered tokens with CoinGecko data but no
-   *    classic Uniswap pool (e.g. UniswapX-routed tokens like ARB, STRK)
+   * Builds a complete, unified token feed using CoinGecko as the sole price
+   * and liquidity-proxy source. No Uniswap Trading API calls are made here —
+   * those are reserved for when a swap is actually being executed (Strategy /
+   * Executor agents).
    *
-   * Returns everything the LLM needs to select and rank candidates.
+   * Flow:
+   *   fetchTrendingTokens()                      — 1 CoinGecko call
+   *   → parallel: CoinGecko market data           — 1–2 CoinGecko calls
+   *              DeFi Llama historical changes    — 1 free call
+   *              Narrative signal                 — Reddit + news scrape
+   *   → build synthetic PoolSnapshot per token   — no external calls
    */
   private async buildTokenFeed(): Promise<{
     snapshots: PoolSnapshot[];
     marketData: Map<string, CoinGeckoMarketData>;
     narrativeSignal: import("./core").NarrativeSignal;
   }> {
-    const { snapshots, trendingCoinGeckoIds, trendingSymbols } =
-      await fetchOnChainPools();
+    // Step 1 — trending tokens (one CoinGecko call; result feeds narrative de-dup)
+    const trendingResult = await fetchTrendingTokens();
+    const { coinGeckoIds: trendingCoinGeckoIds, trendingSymbols } =
+      trendingResult;
 
-    // Address map for DeFi Llama — pool tokens + full registry
+    // Address map for DeFi Llama — full registry + any trending extras
     const addressBySymbol = new Map<string, string>(
-      snapshots.map((s) => [normalizeSymbol(s.tokenSymbol), s.tokenAddress]),
+      Object.entries(SYMBOL_TO_TOKEN).map(([sym, def]) => [sym, def.address]),
     );
-    for (const [sym, def] of Object.entries(SYMBOL_TO_TOKEN)) {
-      if (!addressBySymbol.has(sym)) addressBySymbol.set(sym, def.address);
+    for (const pair of trendingResult.pairs) {
+      const sym = normalizeSymbol(pair.tokenIn.symbol);
+      if (!addressBySymbol.has(sym))
+        addressBySymbol.set(sym, pair.tokenIn.address);
     }
 
-    // Parallel: narrative signal + DeFi Llama + CoinGecko market data
+    // Step 2 — three parallel calls (no Uniswap API)
     const [narrativeSignal, historicalChanges, marketData] = await Promise.all([
+      // Pass prefetched trending symbols so narrativeSignal skips its own CoinGecko fetch
       fetchNarrativeSignal(this.browser, trendingSymbols),
       fetchDefiLlamaHistoricalChanges(addressBySymbol),
       fetchCoinGeckoMarketDataService(
@@ -260,7 +266,7 @@ export class ResearchAgent {
       ),
     ]);
 
-    // Merge 7d/30d historical price changes into market data
+    // Merge DeFi Llama 7d/30d changes into market data
     for (const [sym, hist] of historicalChanges) {
       const existing = marketData.get(sym);
       if (existing) {
@@ -269,44 +275,56 @@ export class ResearchAgent {
       }
     }
 
-    // Populate liquidityUSD (includes market-cap floor for UniswapX-routed tokens)
-    populateLiquidityUSD(snapshots, marketData);
+    // Step 3 — build snapshots entirely from CoinGecko data
+    // liquidityUSD = 0.5 % of market cap (conservative DEX liquidity proxy)
+    const snapshots: PoolSnapshot[] = [];
+    const addedSymbols = new Set<string>();
+    const wethAddress = SYMBOL_TO_TOKEN["WETH"]?.address ?? "";
 
-    // Synthetic snapshots: registered tokens with CoinGecko market data but no
-    // classic Uniswap pool — use 0.5% of market cap as a conservative liquidity proxy
-    const pooledSymbols = new Set(
-      snapshots.map((s) => normalizeSymbol(s.tokenSymbol)),
-    );
+    const buildSnapshot = (
+      sym: string,
+      address: string,
+      cg: CoinGeckoMarketData,
+    ): PoolSnapshot => ({
+      poolAddress: address, // placeholder — no pool queried at research time
+      tokenAddress: address,
+      tokenSymbol: sym,
+      tokenName: sym,
+      baseTokenSymbol: "WETH",
+      baseTokenAddress: wethAddress,
+      protocol: "synthetic",
+      feePct: 0.3,
+      priceLabel: `USD per ${sym}`,
+      currentPrice: cg.price_usd ?? 0,
+      virtualToken1: 0,
+      liquidityUSD: Math.round((cg.market_cap_usd ?? 0) * 0.005),
+      liquidityRaw: "0",
+      tick: 0,
+    });
+
+    // Registry tokens
     for (const [sym, def] of Object.entries(SYMBOL_TO_TOKEN)) {
-      if (pooledSymbols.has(sym)) continue;
       if (isStablecoin({ symbol: sym, address: def.address })) continue;
       const cg = marketData.get(sym);
-      if (!cg?.market_cap_usd || cg.market_cap_usd <= 0) continue;
-      const syntheticLiquidity = Math.round(cg.market_cap_usd * 0.005);
-      snapshots.push({
-        poolAddress: def.address,
-        tokenAddress: def.address,
-        tokenSymbol: sym,
-        tokenName: sym,
-        baseTokenSymbol: "WETH",
-        baseTokenAddress: SYMBOL_TO_TOKEN["WETH"]?.address ?? "",
-        protocol: "synthetic",
-        feePct: 0.3,
-        priceLabel: `USD per ${sym}`,
-        currentPrice: cg.price_usd ?? 0,
-        virtualToken1: 0,
-        liquidityUSD: syntheticLiquidity,
-        liquidityRaw: "0",
-        tick: 0,
-      });
-      logger.info(
-        `[Researcher] Feed: synthetic ${sym} liquidityUSD=$${syntheticLiquidity.toLocaleString()} (no classic pool)`,
-      );
+      if (!cg?.price_usd || cg.price_usd <= 0) continue;
+      if (!cg.market_cap_usd || cg.market_cap_usd <= 0) continue;
+      snapshots.push(buildSnapshot(sym, def.address, cg));
+      addedSymbols.add(sym);
+    }
+
+    // Trending tokens not already in registry
+    for (const pair of trendingResult.pairs) {
+      const sym = normalizeSymbol(pair.tokenIn.symbol);
+      if (addedSymbols.has(sym)) continue;
+      const cg = marketData.get(sym);
+      if (!cg?.price_usd || cg.price_usd <= 0) continue;
+      snapshots.push(buildSnapshot(sym, pair.tokenIn.address, cg));
+      addedSymbols.add(sym);
     }
 
     snapshots.sort((a, b) => b.liquidityUSD - a.liquidityUSD);
     logger.info(
-      `[Researcher] Token feed ready: ${snapshots.length} tokens | narrative=${narrativeSignal.narrative} fearGreed=${narrativeSignal.fearGreedValue} trending=[${narrativeSignal.trendingTokens.join(",")}]`,
+      `[Researcher] Token feed ready: ${snapshots.length} tokens (CoinGecko-only) | narrative=${narrativeSignal.narrative} fearGreed=${narrativeSignal.fearGreedValue} trending=[${narrativeSignal.trendingTokens.join(",")}]`,
     );
     return { snapshots, marketData, narrativeSignal };
   }

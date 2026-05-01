@@ -214,3 +214,40 @@ export const USDC_DEF: EthereumMainnetTokenRegistryEntry =
   ETHEREUM_MAINNET_RESEARCHER_TOKEN_REGISTRY["USDC"]!;
 export const WETH_DEF: EthereumMainnetTokenRegistryEntry =
   ETHEREUM_MAINNET_RESEARCHER_TOKEN_REGISTRY["WETH"]!;
+
+// ─── ENS ──────────────────────────────────────────────────────────────────────
+
+/** Root ENS name owned by the project. */
+export const ENS_ROOT = "uniswapswarm.eth" as const;
+
+/** Per-agent ENS subdomains. */
+export const AGENT_ENS_NAMES = {
+  researcher: "researcher.uniswapswarm.eth",
+  planner: "planner.uniswapswarm.eth",
+  risk: "risk.uniswapswarm.eth",
+  strategy: "strategy.uniswapswarm.eth",
+  critic: "critic.uniswapswarm.eth",
+  executor: "executor.uniswapswarm.eth",
+} as const;
+
+export type AgentEnsName =
+  (typeof AGENT_ENS_NAMES)[keyof typeof AGENT_ENS_NAMES];
+
+/** ENS contract addresses per network. */
+export const ENS_CONTRACTS_BY_CHAIN = {
+  /** Ethereum mainnet (chainId 1) */
+  1: {
+    registry: "0x00000000000C2E074eC69A0dFb2997BA6C7d2e1e",
+    nameWrapper: "0xD4416b13d2b3a9aBae7AcD5D6C2BbDBE25686401",
+    publicResolver: "0x231b0Ee14048e9dCcD1d247744d114a4EB5E8E63",
+  },
+  /** Sepolia testnet (chainId 11155111) */
+  11155111: {
+    registry: "0x00000000000C2E074eC69A0dFb2997BA6C7d2e1e",
+    nameWrapper: "0x0635513f179D50A207757E05759CbD106d7dFcE8",
+    publicResolver: "0x8FADE66B79cC9f707aB26799354482EB93a5B7dD",
+  },
+} as const;
+
+/** @deprecated Use ENS_CONTRACTS_BY_CHAIN[1] for mainnet. Kept for backwards-compat. */
+export const ENS_CONTRACTS = ENS_CONTRACTS_BY_CHAIN[1];

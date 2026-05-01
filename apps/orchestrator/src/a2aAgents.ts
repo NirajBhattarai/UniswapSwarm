@@ -18,7 +18,7 @@ import {
   jsonRpcHandler,
 } from "@a2a-js/sdk/server/express";
 import { v4 as uuidv4 } from "uuid";
-import { logger } from "@swarm/shared";
+import { logger, AGENT_ENS_NAMES } from "@swarm/shared";
 import { LedgerLowError } from "@swarm/compute";
 import type { SwarmOrchestrator } from "./orchestrator";
 import { getManagedPrivateKey, isManagedWalletFunded } from "./managedWallets";
@@ -59,6 +59,8 @@ export type AgentDescriptor = {
   skillId: string;
   skillName: string;
   skillExamples: string[];
+  /** ENS subdomain identity for this agent (e.g. researcher.uniswapswarm.eth). */
+  ensName: string;
 };
 
 export const SWARM_AGENT_DESCRIPTORS: AgentDescriptor[] = [
@@ -73,6 +75,7 @@ export const SWARM_AGENT_DESCRIPTORS: AgentDescriptor[] = [
       "Find safe trade candidates around ETH UNI ARB",
       "Scan Uniswap pools for low-risk swap ideas",
     ],
+    ensName: AGENT_ENS_NAMES.researcher,
   },
   {
     id: "planner",
@@ -85,6 +88,7 @@ export const SWARM_AGENT_DESCRIPTORS: AgentDescriptor[] = [
       "Plan a conservative swap based on the research report",
       "Create a multi-step trade plan for ETH/USDC",
     ],
+    ensName: AGENT_ENS_NAMES.planner,
   },
   {
     id: "risk",
@@ -97,6 +101,7 @@ export const SWARM_AGENT_DESCRIPTORS: AgentDescriptor[] = [
       "Score risk for the candidate tokens",
       "Flag any unsafe tokens in the plan",
     ],
+    ensName: AGENT_ENS_NAMES.risk,
   },
   {
     id: "strategy",
@@ -109,6 +114,7 @@ export const SWARM_AGENT_DESCRIPTORS: AgentDescriptor[] = [
       "Build the best concrete swap from approved tokens",
       "Pick token-in/token-out, size and slippage",
     ],
+    ensName: AGENT_ENS_NAMES.strategy,
   },
   {
     id: "critic",
@@ -121,6 +127,7 @@ export const SWARM_AGENT_DESCRIPTORS: AgentDescriptor[] = [
       "Approve or reject the proposed trade",
       "Audit the plan for issues",
     ],
+    ensName: AGENT_ENS_NAMES.critic,
   },
   {
     id: "executor",
@@ -133,6 +140,7 @@ export const SWARM_AGENT_DESCRIPTORS: AgentDescriptor[] = [
       "Execute the approved swap (dry-run by default)",
       "Submit the trade and report tx hash",
     ],
+    ensName: AGENT_ENS_NAMES.executor,
   },
 ];
 

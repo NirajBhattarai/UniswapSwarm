@@ -4,6 +4,7 @@ import {
   QUERY_PAIRS,
   QUOTE_SWAPPER_ADDRESS,
   SYMBOL_TO_TOKEN,
+  USDC_DEF,
   WETH_DEF,
 } from "../core/constants";
 import type {
@@ -28,9 +29,36 @@ export interface OnChainPoolsResult {
   trendingSymbols: string[];
 }
 
+// Fallback quote tokens tried in order when TOKEN/WETH returns 404.
+// L2 tokens (OP, STRK, etc.) and AI tokens often have deeper USDC pools.
+const FALLBACK_QUOTE_TOKENS = [
+  {
+    address: WETH_DEF.address,
+    symbol: "WETH",
+    name: "Wrapped Ether",
+    decimals: WETH_DEF.decimals,
+  },
+  {
+    address: USDC_DEF.address,
+    symbol: "USDC",
+    name: "USD Coin",
+    decimals: USDC_DEF.decimals,
+  },
+  {
+    address: "0xdAC17F958D2ee523a2206206994597C13D831ec7",
+    symbol: "USDT",
+    name: "Tether USD",
+    decimals: 6,
+  },
+];
+
 /**
  * Builds QueryPairs for every token in SYMBOL_TO_TOKEN that isn't already
  * covered by the static QUERY_PAIRS set — no hardcoded per-narrative lists.
+ *
+ * Returns all three candidate pairs (TOKEN/WETH, TOKEN/USDC, TOKEN/USDT) per
+ * symbol so fetchPoolSnapshots can pick the first one that the Uniswap API
+ * actually has a quote for. Deduplication by symbol happens after fetching.
  */
 function buildNarrativeExtraPairs(knownSymbols: Set<string>): QueryPair[] {
   const pairs: QueryPair[] = [];
@@ -40,23 +68,22 @@ function buildNarrativeExtraPairs(knownSymbols: Set<string>): QueryPair[] {
     if (BASE_SYMBOLS.has(symbol) || STABLE_SYMBOLS.has(symbol)) continue;
 
     const amountIn = (10n ** BigInt(def.decimals)).toString();
-    pairs.push({
-      tokenIn: {
-        address: def.address,
-        symbol,
-        name: symbol,
-        decimals: def.decimals,
-      },
-      tokenOut: {
-        address: WETH_DEF.address,
-        symbol: "WETH",
-        name: "Wrapped Ether",
-        decimals: WETH_DEF.decimals,
-      },
-      amountIn,
-      priceLabel: `WETH per ${symbol}`,
-    });
-    logger.debug(`[Researcher] Extra pair queued: ${symbol} vs WETH`);
+    for (const quoteToken of FALLBACK_QUOTE_TOKENS) {
+      pairs.push({
+        tokenIn: {
+          address: def.address,
+          symbol,
+          name: symbol,
+          decimals: def.decimals,
+        },
+        tokenOut: quoteToken,
+        amountIn,
+        priceLabel: `${quoteToken.symbol} per ${symbol}`,
+      });
+    }
+    logger.debug(
+      `[Researcher] Extra pairs queued: ${symbol} vs WETH/USDC/USDT`,
+    );
   }
 
   return pairs;
@@ -130,16 +157,28 @@ async function fetchPoolSnapshots(
   uniswapApiKey: string,
   pairs: QueryPair[],
 ): Promise<PoolSnapshot[]> {
-  const snapshots: PoolSnapshot[] = [];
+  // Deduplicate by tokenIn.symbol — keep the first successful quote per symbol
+  // (pairs are ordered WETH → USDC → USDT so WETH is always preferred).
+  const seen = new Map<string, PoolSnapshot>();
+  const results: PoolSnapshot[] = [];
 
   await Promise.all(
     pairs.map(async (pair) => {
+      const sym = normalizeSymbol(pair.tokenIn.symbol);
+      // If a higher-priority pair already succeeded for this symbol, skip.
+      if (seen.has(sym)) return;
       const snapshot = await fetchPoolSnapshotForPair(pair, uniswapApiKey);
-      if (snapshot) snapshots.push(snapshot);
+      if (snapshot) {
+        // Guard against a race where two fallback pairs resolve simultaneously.
+        if (!seen.has(sym)) {
+          seen.set(sym, snapshot);
+          results.push(snapshot);
+        }
+      }
     }),
   );
 
-  return snapshots;
+  return results;
 }
 
 async function fetchPoolSnapshotForPair(

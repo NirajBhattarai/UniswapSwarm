@@ -244,6 +244,24 @@ export function createServer(
 
   registerA2ARoutes(app, orchestrator, publicBaseUrl);
 
+  // ── ENS agent discovery endpoint ─────────────────────────────────────────
+  // Returns live ENS records for all swarm agents resolved from Sepolia.
+  // Useful for dashboards, external callers, and demo purposes.
+  app.get(
+    "/api/ens/agents",
+    async (_req: Request, res: Response): Promise<void> => {
+      try {
+        const { resolveAgentRegistry } = await import("./ensRegistry");
+        const records = await resolveAgentRegistry();
+        res.json({ chain: "sepolia", chainId: 11155111, agents: records });
+      } catch (err) {
+        res
+          .status(500)
+          .json({ error: "ENS resolution failed", detail: String(err) });
+      }
+    },
+  );
+
   // Register individual A2A agent routes on the same port
   const agentRoutes = registerSwarmA2AAgentRoutes(
     app,

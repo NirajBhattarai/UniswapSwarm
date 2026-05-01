@@ -11,63 +11,109 @@ An autonomous AI agent swarm that identifies and executes profitable, low-risk t
 The swarm runs a sequential pipeline of specialised agents that share a common **Blackboard Memory** per cycle. Each agent writes its output to in-process memory that is simultaneously persisted to **0G Storage** as an immutable, on-chain audit trail.
 
 ```mermaid
-flowchart TD
-    subgraph UI["🖥️ CopilotKit Web Cockpit (Next.js)"]
-        CK["CopilotKit Chat Shell"]
-        HITL1["HITL: SwapIntentForm"]
-        HITL2["HITL: TradeApprovalCard"]
-        Sidebar["Sidebar Cards\n(plan · risk · strategy · audit)"]
+flowchart TB
+    subgraph ClientLayer["🖥️ Client Layer"]
+        WebUI["Next.js Web App\napps/web\n(CopilotKit + Reown AppKit)"]
     end
 
-    subgraph Orchestrator["🧠 Orchestrator (Express · Port 4000)"]
-        OA["SwarmOrchestrationAgent\n(Gemini 2.5)"]
-        A2AMW["A2AMiddlewareAgent\n(AG-UI ↔ A2A bridge)"]
+    subgraph CopilotRuntime["🧠 CopilotKit Runtime  (in-process, web)"]
+        CKRoute["API Route\n/api/copilotkit"]
+        A2AMiddleware["A2AMiddlewareAgent\n(@ag-ui/a2a-middleware)"]
+        OrchestratorLLM["Orchestration LLM\nGemini (SwarmOrchestrationAgent)"]
     end
 
-    subgraph Pipeline["🤖 Agent Pipeline (A2A JSON-RPC)"]
-        direction LR
-        R["🔍 Researcher"]
-        P["📋 Planner"]
-        Ri["⚠️ Risk"]
-        S["📈 Strategy"]
-        C["🧐 Critic"]
-        E["⚡ Executor"]
-        R --> P --> Ri --> S --> C --> E
+    subgraph Orchestrator["⚙️ Orchestrator Server  :4000"]
+        Server["Express Server\nserver.ts"]
+        OrchestratorCore["SwarmOrchestrator\norchestrator.ts"]
+        A2ARouterO["A2A JSON-RPC Router\na2aOrchestrator.ts"]
+        ENSReg["ENS Registry\nensRegistry.ts"]
+        HistoryMW["DynamoDB History\nhistoryStore.ts"]
+        ManagedW["Managed Wallets\nmanagedWallets.ts"]
+
+        subgraph AgentEndpoints["A2A Agent Endpoints  /a2a/agents/*"]
+            R["/researcher"]
+            PL["/planner"]
+            RK["/risk"]
+            ST["/strategy"]
+            CR["/critic"]
+            EX["/executor"]
+        end
     end
 
-    subgraph Infra["🌐 0G Network"]
-        ZGC["0G Compute\n(LLM inference)"]
-        ZGS["0G Storage\n(audit trail)"]
-        ZGF["0G Fine-tuning\n(TEE · LoRA)"]
+    subgraph AgentPipeline["🤖 Agent Pipeline  (packages)"]
+        ResearchAgent["1️⃣ ResearchAgent\nagent-researcher"]
+        PlannerAgent["2️⃣ PlannerAgent\nagent-planner"]
+        RiskAgent["3️⃣ RiskAgent\nagent-risk"]
+        StrategyAgent["4️⃣ StrategyAgent\nagent-strategy"]
+        CriticAgent["5️⃣ CriticAgent\nagent-critic"]
+        ExecutorAgent["6️⃣ ExecutorAgent\nagent-executor"]
     end
 
-    subgraph External["📡 External Data"]
-        UNI["Uniswap Trading API\n(V2/V3/V4/UniswapX pools)"]
-        CG["CoinGecko\n(market data)"]
-        FG["Fear & Greed Index"]
-        ETH["Ethereum RPC\n(on-chain reads)"]
+    subgraph SharedInfra["🌐 Infrastructure"]
+        ZGCompute["0G Compute\nLLM inference"]
+        ZGStorage["0G Storage\nBlackboardMemory\n(shared session state)"]
+        ZGF["0G Fine-tuning\nTEE · LoRA"]
+        DynamoDB["DynamoDB\nwallet keys + cycle history"]
+        ENSChain["ENS on Sepolia\n*.uniswapswarm.eth\ntext[url] / text[name]"]
+        Uniswap["Uniswap SwapRouter02\nEthereum mainnet"]
+        CoinGecko["CoinGecko API\nmarket data"]
+        UniswapPools["Uniswap V2/V3/V4\n+ UniswapX pools"]
+        FearGreed["Fear & Greed Index\n+ Reddit/news"]
     end
 
-    BM[("📦 Blackboard Memory\n(in-process + 0G Storage)")]
+    %% Web → CopilotKit
+    WebUI <-->|"AG-UI protocol  SSE"| CKRoute
+    CKRoute --> A2AMiddleware
+    A2AMiddleware --> OrchestratorLLM
+    OrchestratorLLM -->|"send_message_to_a2a_agent"| AgentEndpoints
 
-    CK <-->|"AG-UI Protocol"| A2AMW
-    A2AMW <-->|"send_message_to_a2a_agent"| OA
-    OA -->|"A2A JSON-RPC"| Pipeline
+    %% Web → Orchestrator direct
+    WebUI -->|"SSE  POST /a2a/route/stream\nPOST /agents/*"| Server
+    WebUI -->|"GET /managed-wallet/*/ledger\nPOST /fund-ledger"| ManagedW
 
-    R -->|"researcher/report"| BM
-    P -->|"planner/plan"| BM
-    Ri -->|"risk/assessments"| BM
-    S -->|"strategy/proposal"| BM
-    C -->|"critic/critique"| BM
-    E -->|"executor/result"| BM
+    %% Orchestrator internals
+    Server --> OrchestratorCore
+    Server --> A2ARouterO
+    Server --> ENSReg
+    Server --> HistoryMW
 
-    BM -->|"root hash + bytes"| ZGS
-    Pipeline -->|"LLM inference"| ZGC
-    R --> UNI & CG & FG & ETH
+    AgentEndpoints --> OrchestratorCore
+    A2ARouterO --> AgentEndpoints
 
-    ZGF -.->|"LoRA adapter\n(token classifier)"| ZGC
-    Sidebar --- BM
-    HITL2 -.->|"approve / reject"| E
+    ENSReg <-->|"read/write text[url]\non-chain"| ENSChain
+
+    %% Pipeline — strict sequential order
+    OrchestratorCore --> ResearchAgent
+    ResearchAgent -->|"researcher/report"| PlannerAgent
+    PlannerAgent -->|"planner/plan"| RiskAgent
+    RiskAgent -->|"risk/assessments"| StrategyAgent
+    StrategyAgent -->|"strategy/proposal"| CriticAgent
+    CriticAgent -->|"critic/critique"| ExecutorAgent
+
+    %% Shared state (blackboard)
+    ResearchAgent & PlannerAgent & RiskAgent & StrategyAgent & CriticAgent & ExecutorAgent <-->|"R/W blackboard"| ZGStorage
+    ResearchAgent & PlannerAgent & RiskAgent & StrategyAgent & CriticAgent & ExecutorAgent --> ZGCompute
+
+    %% External data
+    ResearchAgent --> CoinGecko
+    ResearchAgent --> UniswapPools
+    ResearchAgent --> FearGreed
+    ExecutorAgent --> Uniswap
+
+    %% Fine-tuning
+    ZGF -.->|"LoRA adapter\n(token classifier)"| ZGCompute
+
+    %% Persistence
+    HistoryMW <--> DynamoDB
+    ManagedW <-->|"AES-256-GCM encrypted keys"| DynamoDB
+
+    style ENSChain fill:#4b2eaa,color:#fff
+    style ZGCompute fill:#1a6b3c,color:#fff
+    style ZGStorage fill:#1a6b3c,color:#fff
+    style ZGF fill:#1a6b3c,color:#fff
+    style Uniswap fill:#ff007a,color:#fff
+    style OrchestratorLLM fill:#1967d2,color:#fff
+    style A2AMiddleware fill:#1967d2,color:#fff
 ```
 
 ### Agent Roles
@@ -603,6 +649,90 @@ await this.memory.write(
 
 // Dump all entries (chronological) — used by orchestrator for UI streaming
 const all = this.memory.readAll(); // MemoryEntry[]
+```
+
+---
+
+## ENS Agent Registry
+
+ENS (`uniswapswarm.eth` on **Sepolia**) is the single source of truth for agent endpoint discovery. Any caller that knows an agent's ENS name can find its live A2A URL without any other configuration.
+
+### On-chain structure
+
+Each agent has an ENS subdomain with two text records:
+
+| ENS name                      | `text[url]`                            | `text[name]`       |
+| ----------------------------- | -------------------------------------- | ------------------ |
+| `researcher.uniswapswarm.eth` | `https://<host>/a2a/agents/researcher` | `Researcher Agent` |
+| `planner.uniswapswarm.eth`    | `https://<host>/a2a/agents/planner`    | `Planner Agent`    |
+| `risk.uniswapswarm.eth`       | `https://<host>/a2a/agents/risk`       | `Risk Agent`       |
+| `strategy.uniswapswarm.eth`   | `https://<host>/a2a/agents/strategy`   | `Strategy Agent`   |
+| `critic.uniswapswarm.eth`     | `https://<host>/a2a/agents/critic`     | `Critic Agent`     |
+| `executor.uniswapswarm.eth`   | `https://<host>/a2a/agents/executor`   | `Executor Agent`   |
+
+The subdomain names and contract addresses are defined once in [`packages/shared/src/constants.ts`](./packages/shared/src/constants.ts) (`AGENT_ENS_NAMES`, `ENS_CONTRACTS_BY_CHAIN`) and imported everywhere.
+
+### Lifecycle
+
+```mermaid
+sequenceDiagram
+    participant Dev as Developer
+    participant Setup as scripts/setup-ens.ts
+    participant ENS as ENS on Sepolia
+    participant Orch as Orchestrator (startup)
+    participant Caller as External Caller
+
+    Dev->>Setup: npm run setup-ens
+    Setup->>ENS: setSubnodeRecord() — create subnames
+    Setup->>ENS: setAddr() + setText(name) + setText(url)
+
+    Orch->>ENS: publishAgentUrlsToEns(A2A_PUBLIC_BASE_URL)
+    Note over Orch,ENS: writes text[url] = baseUrl/a2a/agents/<id><br/>for every agent — idempotent, skips unchanged
+
+    Orch->>ENS: resolveAgentRegistry()
+    ENS-->>Orch: addr + text[name] + text[url] per agent
+    Note over Orch: cached in-process<br/>exposed at GET /api/ens/agents
+
+    Caller->>ENS: getResolver(name) → getText("url")
+    ENS-->>Caller: live A2A endpoint URL
+    Caller->>Orch: A2A JSON-RPC to resolved URL
+```
+
+### How it's used in code
+
+| Location                                                                         | What it does                                                                                                                 |
+| -------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| [`scripts/setup-ens.ts`](./scripts/setup-ens.ts)                                 | **One-time setup** — creates subnames, sets `addr`, `text[name]`, and initial `text[url]` records                            |
+| [`scripts/approve-ens-delegate.ts`](./scripts/approve-ens-delegate.ts)           | Approves a delegate key so CI can update records without the owner key                                                       |
+| [`apps/orchestrator/src/ensRegistry.ts`](./apps/orchestrator/src/ensRegistry.ts) | `publishAgentUrlsToEns()` — **self-registration** at startup; `resolveAgentRegistry()` — **discovery** with in-process cache |
+| [`apps/orchestrator/src/index.ts`](./apps/orchestrator/src/index.ts)             | Calls both functions at boot; `publishAgentUrlsToEns` only runs when `A2A_PUBLIC_BASE_URL` is set                            |
+| [`apps/orchestrator/src/server.ts`](./apps/orchestrator/src/server.ts)           | `GET /api/ens/agents` — exposes resolved records (chain, chainId, agents[]) to dashboards                                    |
+| [`apps/orchestrator/src/a2aAgents.ts`](./apps/orchestrator/src/a2aAgents.ts)     | Each `AgentDescriptor` carries its `ensName` for card metadata                                                               |
+| [`scripts/call-agent.ts`](./scripts/call-agent.ts)                               | Dev script — resolves `text[url]` directly from ENS then sends an A2A JSON-RPC message                                       |
+
+### Required env vars
+
+| Variable                  | Description                                                                       |
+| ------------------------- | --------------------------------------------------------------------------------- |
+| `ENS_RPC_URL`             | Sepolia JSON-RPC URL (required for any ENS read/write)                            |
+| `ENS_OWNER_PRIVATE_KEY`   | Owner key for `uniswapswarm.eth` — used by `setup-ens.ts`                         |
+| `ENS_RECORDS_PRIVATE_KEY` | Approved delegate key — preferred for CI and the orchestrator's self-registration |
+| `A2A_PUBLIC_BASE_URL`     | Public base URL written into `text[url]` on each agent's subname at startup       |
+
+> **ENS is discovery-only.** Once a URL is resolved, agents communicate over standard HTTP using the A2A JSON-RPC protocol. ENS adds zero latency to the hot path — `resolveAgentRegistry()` results are cached for the lifetime of the process.
+
+### Setup commands
+
+```sh
+# 1. Create subnames + set initial records (owner key required)
+npm run setup-ens
+
+# 2. Approve a delegate so CI / orchestrator can update records without the owner key
+npm run approve-ens-delegate
+
+# 3. Call any agent directly via its ENS-resolved URL (dev / smoke-test)
+npm run call-agent -- researcher "Find top ETH pools"
+npm run call-agent -- planner   "Plan a conservative ETH/USDC swap"
 ```
 
 ---

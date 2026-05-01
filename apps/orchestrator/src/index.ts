@@ -2,6 +2,7 @@ import "dotenv/config";
 import { SwarmOrchestrator } from "./orchestrator";
 import { startServer } from "./server";
 import { logger, getConfig } from "@swarm/shared";
+import { resolveAgentRegistry, publishAgentUrlsToEns } from "./ensRegistry";
 
 async function main(): Promise<void> {
   const cfg = getConfig();
@@ -17,10 +18,29 @@ async function main(): Promise<void> {
   const orchestrator = new SwarmOrchestrator();
   await orchestrator.init();
 
+  // ── ENS: self-register public URL then discover all agents ───────────────
+  // If A2A_PUBLIC_BASE_URL and an ENS key are set, update on-chain text[url]
+  // records so any external caller can discover this deployment via ENS alone.
+  const publicBaseUrl =
+    process.env.A2A_PUBLIC_BASE_URL ??
+    `http://localhost:${process.env.PORT ?? 4000}`;
+
+  if (process.env.A2A_PUBLIC_BASE_URL) {
+    await publishAgentUrlsToEns(publicBaseUrl).catch((err: unknown) =>
+      logger.warn(`[ENS] Self-registration failed: ${String(err)}`),
+    );
+  }
+
+  // Resolve & log all agent endpoints from ENS (non-blocking — best effort).
+  resolveAgentRegistry().catch((err: unknown) =>
+    logger.warn(`[ENS] Discovery failed: ${String(err)}`),
+  );
+
   // Start HTTP API with all endpoints on the same port:
   // - /agents/* routes
   // - A2A orchestrator at /a2a/jsonrpc and /a2a/rest
   // - Individual A2A agents at /a2a/agents/* (no longer separate ports)
+  // - ENS discovery at /api/ens/agents
   await startServer(orchestrator);
 
   // Autonomous cycling is disabled by default.
