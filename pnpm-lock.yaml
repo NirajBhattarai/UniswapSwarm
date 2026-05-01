@@ -225,6 +225,12 @@ importers:
       '@ai-sdk/google':
         specifier: ^1.2.18
         version: 1.2.22(zod@3.25.76)
+      '@aws-sdk/client-dynamodb':
+        specifier: ^3.1038.0
+        version: 3.1038.0
+      '@aws-sdk/lib-dynamodb':
+        specifier: ^3.1038.0
+        version: 3.1038.0(@aws-sdk/client-dynamodb@3.1038.0)
       '@copilotkit/react-core':
         specifier: ^1.56.3
         version: 1.56.3(@types/mdast@4.0.4)(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(graphql@16.13.2)(micromark-util-types@2.0.2)(micromark@4.0.2)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(zod@3.25.76)
