@@ -5,13 +5,6 @@ export const UNISWAP_TRADE_API_BASE_URL =
 // CoinGecko API (free demo tier + pro tier — both use the same base URL with different key headers)
 export const COINGECKO_API_BASE_URL = "https://api.coingecko.com/api/v3";
 
-// Uniswap Ethereum mainnet protocol addresses used across the swarm
-export const UNISWAP = {
-  SWAP_ROUTER_02: "0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45",
-  QUOTER_V2: "0x61fFE014bA17989E743c5F6cB21bF9697530B21e",
-  FACTORY: "0x1F98431c8aD98523631AE4a59f267346ea31F984",
-} as const;
-
 export const TOKENS = {
   WETH: "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
   USDC: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
@@ -20,12 +13,9 @@ export const TOKENS = {
   DAI: "0x6B175474E89094C44Da98b954EedeAC495271d0F",
 } as const;
 
-export const POOL_FEE_TIERS = [500, 3000, 10_000] as const;
-export type PoolFeeTier = (typeof POOL_FEE_TIERS)[number];
-
-// Legacy Uniswap subgraph endpoint (currently unused in the swarm)
-export const UNISWAP_SUBGRAPH_URL =
-  "https://api.thegraph.com/subgraphs/name/uniswap/uniswap-v3";
+// Zero address — used to represent native ETH and anonymous/unset wallets
+export const ZERO_ADDRESS =
+  "0x0000000000000000000000000000000000000000" as const;
 
 // Minimum sanity values
 export const DEFAULTS = {

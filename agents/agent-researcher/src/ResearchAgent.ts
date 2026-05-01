@@ -3,7 +3,6 @@ import { BlackboardMemory } from "@swarm/memory";
 import {
   logger,
   getConfig,
-  UNISWAP,
   UNISWAP_TRADE_API_BASE_URL,
   isStablecoin,
 } from "@swarm/shared";
@@ -16,9 +15,6 @@ import { ethers } from "ethers";
 import { Impit } from "impit";
 
 import {
-  POOL_ABI,
-  QUOTER_V2_ABI,
-  FACTORY_ABI,
   ERC20_META_ABI,
   MULTICALL3_ADDRESS,
   MULTICALL3_ABI,
@@ -26,9 +22,6 @@ import {
   SYMBOL_TO_TOKEN,
   ADDRESS_TO_SYMBOL,
   USDC_DEF,
-  WETH_DEF,
-  FEE_TIERS,
-  MIN_POOL_LIQUIDITY_USD,
   SYMBOL_TO_COINGECKO_ID,
   SYSTEM_PROMPT,
 } from "./core";
@@ -1021,7 +1014,7 @@ export class ResearchAgent {
       return result;
     }
 
-    // ── STEP 2A: Uniswap Trading API (PRIMARY — uses API key) ─────────────────
+    // ── Uniswap Trading API ────────────────────────────────────────────────────
     const apiPrice = await this.priceViaTradeApi(tokenDef, canonicalSymbol);
     if (apiPrice !== null) {
       const result: TokenPriceResult = {
@@ -1038,41 +1031,7 @@ export class ResearchAgent {
       return result;
     }
 
-    // ── STEP 2B: On-chain QuoterV2 (FALLBACK — no API key needed) ────────────
-    const quotePrice = await this.priceViaQuote(tokenDef, provider);
-    if (quotePrice !== null) {
-      const result: TokenPriceResult = {
-        symbol: canonicalSymbol,
-        address: tokenDef.address,
-        price_usd: quotePrice,
-        source: "uniswap",
-        liquidity_used: "TOKEN/USDC",
-      };
-      this.priceCache.set(cacheKey, {
-        result,
-        expiresAt: Date.now() + this.CACHE_TTL_MS,
-      });
-      return result;
-    }
-
-    // ── STEP 2C: Pool slot0 pricing (SECONDARY FALLBACK) ─────────────────────
-    const poolResult = await this.priceViaPool(tokenDef, provider);
-    if (poolResult !== null) {
-      const result: TokenPriceResult = {
-        symbol: canonicalSymbol,
-        address: tokenDef.address,
-        price_usd: poolResult.price,
-        source: "uniswap",
-        liquidity_used: poolResult.pairLabel,
-      };
-      this.priceCache.set(cacheKey, {
-        result,
-        expiresAt: Date.now() + this.CACHE_TTL_MS,
-      });
-      return result;
-    }
-
-    // ── STEP 3: Validation failed / unresolvable ──────────────────────────────
+    // ── Unresolvable ──────────────────────────────────────────────────────────
     const failed: TokenPriceResult = {
       symbol: canonicalSymbol,
       address: tokenDef.address,
@@ -1083,16 +1042,16 @@ export class ResearchAgent {
     return failed;
   }
 
-  // ── STEP 2A: Uniswap Trading API pricing ─────────────────────────────────────
+  // ── Uniswap Trading API pricing ───────────────────────────────────────────
   // Calls POST /v1/quote with EXACT_INPUT: 1 TOKEN → USDC.
-  // Returns null if API key is absent, token is USDC, or request fails.
+  // Returns null if UNISWAP_API_KEY is absent, token is USDC, or request fails.
 
   private async priceViaTradeApi(
     token: TokenDef,
     symbol: string,
   ): Promise<number | null> {
     const { UNISWAP_API_KEY } = getConfig();
-    if (!UNISWAP_API_KEY) return null; // no key — skip to QuoterV2
+    if (!UNISWAP_API_KEY) return null;
 
     if (token.address.toLowerCase() === USDC_DEF.address.toLowerCase())
       return null;
@@ -1179,200 +1138,7 @@ export class ResearchAgent {
     }
   }
 
-  // ── STEP 2B: Quote-based pricing via QuoterV2.quoteExactInputSingle ──────────
-  // Simulates selling exactly 1 TOKEN → USDC across all fee tiers.
-  // Returns the USD price on first successful quote, null otherwise.
-
-  private async priceViaQuote(
-    token: TokenDef,
-    provider: ethers.JsonRpcProvider,
-  ): Promise<number | null> {
-    // If the token IS USDC, skip (handled as stablecoin above)
-    if (token.address.toLowerCase() === USDC_DEF.address.toLowerCase())
-      return null;
-
-    const quoter = new ethers.Contract(
-      UNISWAP.QUOTER_V2,
-      QUOTER_V2_ABI,
-      provider,
-    );
-    const amountIn = BigInt(10 ** token.decimals); // simulate 1 full token
-
-    for (const fee of FEE_TIERS) {
-      try {
-        // staticCall prevents any state mutation; ethers v6 returns an array
-        const [amountOut] = (await quoter
-          .getFunction("quoteExactInputSingle")
-          .staticCall({
-            tokenIn: token.address,
-            tokenOut: USDC_DEF.address,
-            amountIn,
-            fee,
-            sqrtPriceLimitX96: 0n,
-          })) as [bigint, ...unknown[]];
-
-        // amountOut is in USDC (6 decimals)
-        const priceUSD = Number(amountOut) / 10 ** USDC_DEF.decimals;
-        if (priceUSD > 0 && this.isPriceValid(priceUSD, token)) {
-          logger.debug(
-            `[Researcher] QuoterV2 price ${token.address} → USDC (fee=${fee}): $${priceUSD}`,
-          );
-          return priceUSD;
-        }
-      } catch {
-        // Pool at this fee tier doesn't exist or has no liquidity — try next
-      }
-    }
-
-    return null;
-  }
-
-  // ── STEP 2B: Pool slot0 pricing (TOKEN/USDC then TOKEN/WETH) ─────────────────
-  // Falls back to reading sqrtPriceX96 from the highest-liquidity pool.
-
-  private async priceViaPool(
-    token: TokenDef,
-    provider: ethers.JsonRpcProvider,
-  ): Promise<{ price: number; pairLabel: string } | null> {
-    const factory = new ethers.Contract(UNISWAP.FACTORY, FACTORY_ABI, provider);
-
-    // ── Try TOKEN/USDC pools ──────────────────────────────────────────────────
-    const usdcResult = await this.priceFromSlot0(
-      token,
-      USDC_DEF,
-      factory,
-      provider,
-    );
-    if (usdcResult !== null) {
-      logger.debug(
-        `[Researcher] slot0 price ${token.address}/USDC: $${usdcResult}`,
-      );
-      return { price: usdcResult, pairLabel: "TOKEN/USDC" };
-    }
-
-    // ── Try TOKEN/WETH pools then convert via WETH/USDC ──────────────────────
-    // First get WETH price in USD (use quote, then fall back to slot0)
-    let wethPriceUSD = (await this.priceViaQuote(WETH_DEF, provider)) ?? null;
-    if (wethPriceUSD === null) {
-      const wethSlot = await this.priceFromSlot0(
-        WETH_DEF,
-        USDC_DEF,
-        factory,
-        provider,
-      );
-      wethPriceUSD = wethSlot;
-    }
-    if (wethPriceUSD === null) return null;
-
-    const wethResult = await this.priceFromSlot0(
-      token,
-      WETH_DEF,
-      factory,
-      provider,
-    );
-    if (wethResult !== null) {
-      const priceUSD = wethResult * wethPriceUSD;
-      if (this.isPriceValid(priceUSD, token)) {
-        logger.debug(
-          `[Researcher] slot0 price ${token.address}/WETH: $${priceUSD}`,
-        );
-        return { price: priceUSD, pairLabel: "TOKEN/WETH" };
-      }
-    }
-
-    return null;
-  }
-
-  // ── Compute price from a pool's slot0 (highest-liquidity fee tier wins) ──────
-  // Returns the price of `tokenA` in terms of `quoteToken` (USD if USDC, WETH otherwise).
-
-  private async priceFromSlot0(
-    tokenA: TokenDef,
-    quoteToken: TokenDef,
-    factory: ethers.Contract,
-    provider: ethers.JsonRpcProvider,
-  ): Promise<number | null> {
-    let bestLiquidity = 0n;
-    let bestPrice: number | null = null;
-
-    for (const fee of FEE_TIERS) {
-      try {
-        const poolAddr = (await factory.getFunction("getPool")(
-          tokenA.address,
-          quoteToken.address,
-          fee,
-        )) as string;
-        if (!poolAddr || poolAddr === ethers.ZeroAddress) continue;
-
-        const pool = new ethers.Contract(poolAddr, POOL_ABI, provider);
-        const [slot0Result, liquidityRaw] = await Promise.all([
-          pool.getFunction("slot0")({ blockTag: "finalized" }) as Promise<
-            [bigint, bigint, ...unknown[]]
-          >,
-          pool.getFunction("liquidity")({
-            blockTag: "finalized",
-          }) as Promise<bigint>,
-        ]);
-
-        const sqrtPriceX96 = slot0Result[0];
-        if (sqrtPriceX96 === 0n) continue;
-
-        // Determine token ordering (lower address = token0 in concentrated-liquidity pools)
-        const aIsToken0 =
-          tokenA.address.toLowerCase() < quoteToken.address.toLowerCase();
-
-        // price_raw = (sqrtPriceX96 / Q96)^2 = token1_units / token0_units
-        const Q96 = 2n ** 96n;
-        const sqrtNum = Number(sqrtPriceX96) / Number(Q96);
-        const rawPrice = sqrtNum * sqrtNum;
-
-        // Convert to human-readable price of tokenA in quoteToken
-        let priceAInQuote: number;
-        if (aIsToken0) {
-          // tokenA = token0, quoteToken = token1
-          // rawPrice = quoteToken_units / tokenA_units
-          // tokenA human price = rawPrice * 10^(d_tokenA - d_quoteToken)
-          // No wait: rawPrice = (token1_smallest / token0_smallest)
-          // 1 human tokenA = 10^d_A token0 units → worth rawPrice * 10^d_A token1 units → / 10^d_quote
-          priceAInQuote =
-            rawPrice * Math.pow(10, tokenA.decimals - quoteToken.decimals);
-        } else {
-          // tokenA = token1, quoteToken = token0
-          // rawPrice = tokenA_units / quoteToken_units
-          // 1 human tokenA = rawPrice * 10^(-d_A) quoteToken_units per tokenA_unit × 10^d_A
-          // priceAInQuote = 1 / (rawPrice * 10^(d_quoteToken - d_A))
-          priceAInQuote =
-            1 /
-            (rawPrice * Math.pow(10, quoteToken.decimals - tokenA.decimals));
-        }
-
-        // Estimate virtual liquidity in USD to pick the deepest pool
-        // virtualQuote ≈ L * sqrtPrice / Q96 (in quote token smallest units)
-        const virtualQuoteUnits =
-          (Number(liquidityRaw) * Number(sqrtPriceX96)) / Number(Q96);
-        const virtualQuoteHuman =
-          virtualQuoteUnits / Math.pow(10, quoteToken.decimals);
-        const liquidityUSD =
-          virtualQuoteHuman * (quoteToken === USDC_DEF ? 1 : 1); // WETH leg handled by caller
-
-        if (liquidityUSD < MIN_POOL_LIQUIDITY_USD) continue;
-
-        if (liquidityRaw > bestLiquidity) {
-          bestLiquidity = liquidityRaw;
-          bestPrice = priceAInQuote;
-        }
-      } catch {
-        continue;
-      }
-    }
-
-    if (bestPrice !== null && this.isPriceValid(bestPrice, tokenA)) {
-      return bestPrice;
-    }
-    return null;
-  }
-
-  // ── STEP 3: Validation ────────────────────────────────────────────────────────
+  // ── Price validation ────────────────────────────────────────────────────────
   // Stablecoins: must be within ±2% of $1. Others: reject ≤0 or obviously absurd.
 
   private isPriceValid(price: number, token: TokenDef): boolean {
