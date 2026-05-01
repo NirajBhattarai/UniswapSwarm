@@ -26,6 +26,7 @@ import { A2AMiddlewareAgent } from "@ag-ui/a2a-middleware";
 import {
   SwarmOrchestrationAgent,
   resolveGeminiKey,
+  ZERO_ADDRESS,
 } from "../../../lib/orchestration-agent";
 import { SWARM_AGENTS, getSwarmAgentUrls } from "../../../lib/swarm-agents";
 
@@ -194,7 +195,6 @@ async function handleCopilotRequest(request: NextRequest) {
   // it to every runtime POST. Validate it is a real-looking Ethereum address
   // before trusting it; fall back to undefined so the agent marks it anonymous.
   const rawWallet = request.headers.get("x-wallet-address")?.trim() ?? "";
-  const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
   const walletAddress =
     /^0x[a-fA-F0-9]{40}$/.test(rawWallet) &&
     rawWallet.toLowerCase() !== ZERO_ADDRESS

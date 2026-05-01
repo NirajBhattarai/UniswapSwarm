@@ -33,7 +33,7 @@ import {
 } from "ai";
 import { createGoogleGenerativeAI } from "@ai-sdk/google";
 
-const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
+export const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 const A2A_TOOL_NAME = "send_message_to_a2a_agent";
 
 interface SwarmOrchestrationAgentConfig extends AgentConfig {
