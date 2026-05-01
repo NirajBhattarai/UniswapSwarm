@@ -493,11 +493,11 @@ flowchart TD
     BB -->|"readAll() — chronological"| STREAM
 
     %% Styling
-    style BB fill:#1e293b,stroke:#38bdf8,color:#e2e8f0
-    style AGENTS fill:#0f172a,stroke:#6366f1,color:#e2e8f0
-    style ZG fill:#0f172a,stroke:#22c55e,color:#e2e8f0
-    style SESSION fill:#020617,stroke:#475569,color:#94a3b8
-    style UI fill:#0f172a,stroke:#f59e0b,color:#e2e8f0
+    style BB fill:#dbeafe,stroke:#2563eb,color:#1e3a8a
+    style AGENTS fill:#ede9fe,stroke:#7c3aed,color:#3b0764
+    style ZG fill:#dcfce7,stroke:#16a34a,color:#14532d
+    style SESSION fill:#f8fafc,stroke:#94a3b8,color:#334155
+    style UI fill:#fef3c7,stroke:#d97706,color:#78350f
 ```
 
 ### Write lifecycle
@@ -535,10 +535,8 @@ flowchart TD
     RV -->|"agent uses value\nin business logic"| BL["if (!critique.approved) return"]
     CF -->|"appended to\nsystem prompt"| LLM["LLM call\n(Gemini / 0G Compute)"]
 
-    style READS fill:#0f172a,stroke:#6366f1,color:#e2e8f0
+    style READS fill:#ede9fe,stroke:#7c3aed,color:#3b0764
 ```
-
-### Temporal write order
 
 ### Temporal write order
 
