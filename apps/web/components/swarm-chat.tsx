@@ -199,6 +199,9 @@ export const SwarmChat: React.FC<SwarmChatProps> = ({ state, onState }) => {
   const [approvalErrors, setApprovalErrors] = useState<ApprovalErrorState>({});
   const [approvalSubmitting, setApprovalSubmitting] =
     useState<ApprovalSubmittingState>({});
+  const [approvalTxHashes, setApprovalTxHashes] = useState<
+    Record<string, string | null>
+  >({});
   const [portfolio, setPortfolio] = useState<WalletPortfolio | null>(null);
   const { open } = useAppKit();
   const { address, isConnected } = useAppKitAccount();
@@ -607,6 +610,7 @@ export const SwarmChat: React.FC<SwarmChatProps> = ({ state, onState }) => {
               executePayload.type === "UNISWAPX"
             ) {
               const orderHash = executePayload.orderHash ?? "(pending)";
+              setApprovalTxHashes((prev) => ({ ...prev, [key]: orderHash }));
               setApprovalStates((prev) => ({
                 ...prev,
                 [key]: { approved: true, rejected: false },
@@ -650,6 +654,8 @@ export const SwarmChat: React.FC<SwarmChatProps> = ({ state, onState }) => {
                 ? BigInt(executePayload.swapTx.value)
                 : BigInt(0),
             });
+            // Show hash immediately — before waiting for confirmation
+            setApprovalTxHashes((prev) => ({ ...prev, [key]: swapTx.hash }));
             await swapTx.wait();
 
             setApprovalStates((prev) => ({
@@ -711,6 +717,7 @@ export const SwarmChat: React.FC<SwarmChatProps> = ({ state, onState }) => {
             isApproved={current.approved}
             isRejected={current.rejected}
             isSubmitting={approvalSubmitting[key] === true}
+            txHash={approvalTxHashes[key] ?? null}
             error={approvalErrors[key] ?? null}
             onApprove={handleApprove}
             onReject={handleReject}
@@ -722,6 +729,7 @@ export const SwarmChat: React.FC<SwarmChatProps> = ({ state, onState }) => {
       approvalStates,
       approvalSubmitting,
       approvalErrors,
+      approvalTxHashes,
       isConnected,
       address,
       walletProvider,

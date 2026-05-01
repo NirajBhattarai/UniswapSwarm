@@ -15,6 +15,7 @@ interface TradeApprovalCardProps {
   isApproved: boolean;
   isRejected: boolean;
   isSubmitting?: boolean;
+  txHash?: string | null;
   error?: string | null;
   onApprove: () => void;
   onReject: () => void;
@@ -34,6 +35,7 @@ export const TradeApprovalCard: React.FC<TradeApprovalCardProps> = ({
   isApproved,
   isRejected,
   isSubmitting = false,
+  txHash = null,
   error = null,
   onApprove,
   onReject,
@@ -147,6 +149,85 @@ export const TradeApprovalCard: React.FC<TradeApprovalCardProps> = ({
           ❌ You rejected the swap. The orchestrator will not execute.
         </div>
       )}
+      {isSubmitting && !txHash && (
+        <div className="mb-3 flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 p-2 text-xs text-blue-800">
+          <svg
+            className="h-3.5 w-3.5 animate-spin text-blue-600"
+            xmlns="http://www.w3.org/2000/svg"
+            fill="none"
+            viewBox="0 0 24 24"
+          >
+            <circle
+              className="opacity-25"
+              cx="12"
+              cy="12"
+              r="10"
+              stroke="currentColor"
+              strokeWidth="4"
+            />
+            <path
+              className="opacity-75"
+              fill="currentColor"
+              d="M4 12a8 8 0 018-8v8z"
+            />
+          </svg>
+          <span>Sending transaction…</span>
+        </div>
+      )}
+      {txHash && (
+        <div
+          className={`mb-3 rounded-lg border p-2 text-xs ${
+            isApproved
+              ? "border-emerald-300 bg-emerald-50 text-emerald-800"
+              : "border-blue-200 bg-blue-50 text-blue-800"
+          }`}
+        >
+          <div className="flex items-center gap-1">
+            {isSubmitting ? (
+              <svg
+                className="h-3 w-3 animate-spin"
+                xmlns="http://www.w3.org/2000/svg"
+                fill="none"
+                viewBox="0 0 24 24"
+              >
+                <circle
+                  className="opacity-25"
+                  cx="12"
+                  cy="12"
+                  r="10"
+                  stroke="currentColor"
+                  strokeWidth="4"
+                />
+                <path
+                  className="opacity-75"
+                  fill="currentColor"
+                  d="M4 12a8 8 0 018-8v8z"
+                />
+              </svg>
+            ) : (
+              <span>✅</span>
+            )}
+            <span className="font-semibold">
+              {isSubmitting ? "Confirming…" : "Transaction confirmed"}
+            </span>
+          </div>
+          <div className="mt-1 flex items-center gap-1 font-mono">
+            <span className="truncate">{txHash}</span>
+            <a
+              href={
+                txHash.length === 66
+                  ? `https://etherscan.io/tx/${txHash}`
+                  : `https://etherscan.io/search?q=${txHash}`
+              }
+              target="_blank"
+              rel="noopener noreferrer"
+              className="shrink-0 underline hover:no-underline"
+            >
+              ↗
+            </a>
+          </div>
+        </div>
+      )}
       {error && (
         <div className="mb-3 rounded-lg border border-rose-300 bg-rose-50 p-2 text-xs text-rose-800">
           ⚠ {error}
@@ -170,9 +251,11 @@ export const TradeApprovalCard: React.FC<TradeApprovalCardProps> = ({
         >
           {isApproved
             ? "✓ Approved"
-            : isSubmitting
-              ? "Awaiting signature…"
-              : "Approve & execute"}
+            : isSubmitting && txHash
+              ? "Confirming…"
+              : isSubmitting
+                ? "Sending transaction…"
+                : "Approve & execute"}
         </button>
         <button
           type="button"
