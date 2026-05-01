@@ -10,24 +10,111 @@ An autonomous AI agent swarm that identifies and executes profitable, low-risk t
 
 The swarm runs a sequential pipeline of specialised agents that share a common **Blackboard Memory** per cycle. Each agent writes its output to in-process memory that is simultaneously persisted to **0G Storage** as an immutable, on-chain audit trail.
 
-```
-Researcher → Planner → Risk → Strategy → Critic → Executor
+```mermaid
+flowchart TD
+    subgraph UI["🖥️ CopilotKit Web Cockpit (Next.js)"]
+        CK["CopilotKit Chat Shell"]
+        HITL1["HITL: SwapIntentForm"]
+        HITL2["HITL: TradeApprovalCard"]
+        Sidebar["Sidebar Cards\n(plan · risk · strategy · audit)"]
+    end
+
+    subgraph Orchestrator["🧠 Orchestrator (Express · Port 4000)"]
+        OA["SwarmOrchestrationAgent\n(Gemini 2.5)"]
+        A2AMW["A2AMiddlewareAgent\n(AG-UI ↔ A2A bridge)"]
+    end
+
+    subgraph Pipeline["🤖 Agent Pipeline (A2A JSON-RPC)"]
+        direction LR
+        R["🔍 Researcher"]
+        P["📋 Planner"]
+        Ri["⚠️ Risk"]
+        S["📈 Strategy"]
+        C["🧐 Critic"]
+        E["⚡ Executor"]
+        R --> P --> Ri --> S --> C --> E
+    end
+
+    subgraph Infra["🌐 0G Network"]
+        ZGC["0G Compute\n(LLM inference)"]
+        ZGS["0G Storage\n(audit trail)"]
+        ZGF["0G Fine-tuning\n(TEE · LoRA)"]
+    end
+
+    subgraph External["📡 External Data"]
+        UNI["Uniswap Trading API\n(V2/V3/V4/UniswapX pools)"]
+        CG["CoinGecko\n(market data)"]
+        FG["Fear & Greed Index"]
+        ETH["Ethereum RPC\n(on-chain reads)"]
+    end
+
+    BM[("📦 Blackboard Memory\n(in-process + 0G Storage)")]
+
+    CK <-->|"AG-UI Protocol"| A2AMW
+    A2AMW <-->|"send_message_to_a2a_agent"| OA
+    OA -->|"A2A JSON-RPC"| Pipeline
+
+    R -->|"researcher/report"| BM
+    P -->|"planner/plan"| BM
+    Ri -->|"risk/assessments"| BM
+    S -->|"strategy/proposal"| BM
+    C -->|"critic/critique"| BM
+    E -->|"executor/result"| BM
+
+    BM -->|"root hash + bytes"| ZGS
+    Pipeline -->|"LLM inference"| ZGC
+    R --> UNI & CG & FG & ETH
+
+    ZGF -.->|"LoRA adapter\n(token classifier)"| ZGC
+    Sidebar --- BM
+    HITL2 -.->|"approve / reject"| E
 ```
 
-Each agent is wrapped in its own **A2A (Agent-to-Agent) JSON-RPC server**. The Next.js cockpit talks to those servers through a Gemini-backed orchestrator and renders the call graph live in the browser as animated handoff cards.
+### Agent Roles
 
-| Agent          | Package            | Role                                                                                                                                                                |
-| -------------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Researcher** | `agent-researcher` | Fetches live multi-protocol Uniswap pool data, CoinGecko market data, Fear & Greed index, Reddit/news narrative signal, and returns ranked `TokenCandidate` objects |
-| **Planner**    | `agent-planner`    | Reads Researcher output and produces a structured `TradePlan` with strategy type, constraints, and tasks                                                            |
-| **Risk**       | `agent-risk`       | Scores each candidate (honeypot, low liquidity, MEV risk, …) and flags unsafe tokens                                                                                |
-| **Strategy**   | `agent-strategy`   | Selects the best trade route, sizes the position, and sets slippage/fee parameters                                                                                  |
-| **Critic**     | `agent-critic`     | Reviews the fully assembled plan and approves or rejects it with a confidence score                                                                                 |
-| **Executor**   | `agent-executor`   | Submits the swap via Uniswap's `SwapRouter02` (supports dry-run and simulation-only modes)                                                                          |
+| Agent | Package | Role |
+|-------|---------|------|
+| **Researcher** | `agent-researcher` | Fetches live Uniswap pool data, CoinGecko market data, Fear & Greed index, Reddit/news narrative signal; detects market narrative (`ai \| safe_haven \| defi \| l2 \| staking \| neutral`); returns ranked `TokenCandidate` objects |
+| **Planner** | `agent-planner` | Reads Researcher output and produces a structured `TradePlan` with strategy type, constraints, and tasks |
+| **Risk** | `agent-risk` | Scores each candidate (honeypot, low liquidity, MEV risk, …) and flags unsafe tokens |
+| **Strategy** | `agent-strategy` | Selects the best trade route, sizes the position, and sets slippage/fee parameters |
+| **Critic** | `agent-critic` | Reviews the fully assembled plan and approves or rejects it with a confidence score |
+| **Executor** | `agent-executor` | Submits the swap via Uniswap's `SwapRouter02` (supports dry-run and simulation-only modes) |
 
 All LLM calls go through `@swarm/compute` (`ZGCompute`) — a thin wrapper around the [0G Serving Broker](https://github.com/0glabs/0g-serving-broker) that auto-manages ledger deposits and provider acknowledgement.
 
 All agent outputs are persisted via `@swarm/memory` (`ZGStorage`) to the [0G Storage network](https://docs.0g.ai) for cross-cycle auditability.
+
+### 0G Fine-tuning Pipeline
+
+The `scripts/train-model.ts` script trains a **token classifier LoRA** on the 0G Compute Network's Trusted Execution Environment (TEE). The trained adapter teaches the swarm's inference layer to precisely categorise tokens into `L1 | L2 | Stable | DeFi | RWA | AI` — improving Researcher candidate selection accuracy.
+
+```mermaid
+sequenceDiagram
+    participant S as train-model.ts
+    participant B as 0G Broker (on-chain)
+    participant T as Provider TEE<br/>(Phala Network)
+    participant ZGS as 0G Storage
+    participant I as 0G Inference
+
+    S->>S: Generate JSONL dataset<br/>(625 lines · 352 examples)
+    S->>B: createFineTuningTask()<br/>(Qwen2.5-0.5B-Instruct · LoRA r=8)
+    B->>T: Upload dataset hash + config
+    T->>T: Train 3 epochs<br/>625 samples · bf16 · neftune_α=5
+    T-->>S: poll /task/{id} every 15s
+    T->>B: settleTask() on-chain
+    S->>T: downloadLoRA()
+    T-->>S: lora_model_{taskId}.zip (217 MB)
+    S->>ZGS: store artifact (optional)
+    S->>I: 86 inference verification prompts
+    I-->>S: PASS / FAIL per category
+```
+
+**Training results (task `dfe58ce0`):**
+- Model: `Qwen2.5-0.5B-Instruct` · LoRA rank=8, alpha=32, dropout=0.1
+- Dataset: 625 JSONL lines (352 unique examples + 154 address-based pairs)
+- 3 epochs · 237 steps · 209s · train_loss 6.834 → **0.4386** (final epoch step: 0.09)
+- Artifact: `output/token-classifier/lora_model_dfe58ce0-f703-40b4-a3e3-67595ffb60a0.zip`
 
 ---
 
@@ -53,20 +140,28 @@ uniswapswarm/
 │       │   └── swarm-chat.tsx        #     CopilotKit actions + chat shell
 │       └── lib/                      #   wallet watch, SSE plumbing, agent registry
 ├── agents/
-│   ├── agent-researcher/   # Uniswap Trading API, CoinGecko, Fear&Greed, narrative detection
+│   ├── agent-researcher/   # Uniswap pool data, CoinGecko, Fear&Greed, narrative detection,
+│   │   └── src/            #   goal-focused token feed, simplified run() + buildTokenFeed()
 │   ├── agent-planner/
 │   ├── agent-risk/
 │   ├── agent-strategy/
 │   ├── agent-critic/
 │   └── agent-executor/
 ├── packages/
-│   ├── compute/            # ZGCompute — 0G Compute Network client
-│   ├── memory/             # BlackboardMemory + ZGStorage — shared agent state & on-chain audit
-│   ├── shared/             # Config (Zod-validated), types, logger, constants, stablecoin set
+│   ├── compute/            # ZGCompute — 0G Compute client + fine-tune task management
+│   ├── memory/             # BlackboardMemory + ZGStorage — shared state & on-chain audit
+│   ├── shared/             # Config (Zod), types, logger, token classifier constants,
+│   │                       #   stablecoin set, PROVIDER_ADDRESS, FINE_TUNE_MODEL
 │   ├── eslint-config/
 │   └── typescript-config/
-└── scripts/
-    └── fund-ledger.ts      # Utility: fund / top-up the 0G Compute ledger
+├── scripts/
+│   ├── train-model.ts      # 0G fine-tuning pipeline: dataset gen → TEE train → LoRA download → verify
+│   ├── check-model.ts      # Quick inference smoke-test against a running 0G provider
+│   ├── fund-ledger.ts      # Fund / top-up the 0G Compute ledger
+│   ├── create-dynamo-tables.ts  # Provision DynamoDB history + wallet tables
+│   └── README.md           # Script-level documentation
+└── output/
+    └── token-classifier/   # Downloaded LoRA artifacts (.zip) + .last-fine-tune-task-id
 ```
 
 Built with [Turborepo](https://turbo.build/) and [pnpm workspaces](https://pnpm.io/workspaces).
@@ -130,6 +225,13 @@ cp .env.example .env
 | `AWS_SECRET_ACCESS_KEY`     | no       | AWS secret access key paired with `AWS_ACCESS_KEY_ID`                                 |
 | `AWS_SESSION_TOKEN`         | no       | AWS session token for temporary credentials (optional)                                |
 
+#### Fine-tuning (`scripts/train-model.ts`)
+
+| Variable        | Description                                                    |
+| --------------- | -------------------------------------------------------------- |
+| `ZG_PRIVATE_KEY`| Same key used for inference — covers the fine-tune sub-account |
+| `ZG_CHAIN_RPC`  | 0G EVM RPC (testnet only — fine-tuning is testnet-only)        |
+
 #### CopilotKit cockpit / A2A integration
 
 | Variable                             | Required        | Description                                                                                               |
@@ -151,7 +253,21 @@ Before first use, top up your 0G Compute ledger (target: 5 OG, keeps 1 OG reserv
 pnpm tsx scripts/fund-ledger.ts
 ```
 
-### 4. Build
+### 4. (Optional) Train the token classifier
+
+Fine-tune a `Qwen2.5-0.5B-Instruct` LoRA on 0G's TEE to improve Researcher token categorisation:
+
+```sh
+# Full pipeline — generate dataset, submit TEE task, download LoRA, run verification
+npx tsx scripts/train-model.ts
+
+# Resume an existing completed task (skip training, just download + verify)
+npx tsx scripts/train-model.ts --skip-train --task-id <uuid>
+```
+
+See [`scripts/README.md`](./scripts/README.md) for full usage and options.
+
+### 5. Build
 
 ```sh
 pnpm build
@@ -290,11 +406,21 @@ COPILOTKIT_MODEL=gemini-2.5-flash
 
 Every agent writes its output to the shared `BlackboardMemory`. Each write is simultaneously uploaded to **0G Storage** as an immutable root hash, forming an on-chain audit trail. Every downstream agent reads prior outputs from that same memory via `memory.contextFor()`.
 
-1. **Researcher** fetches live multi-protocol Uniswap pool data (V2/V3/V4/UniswapX) via the Uniswap Trading API, scrapes the Fear & Greed index and Reddit/news headlines via a TLS-spoofed browser client (`impit`), pulls CoinGecko 24h market data, detects the current market narrative (`ai | safe_haven | defi | l2 | staking | neutral`), and writes `researcher/report` to shared memory.
+1. **Researcher** — refactored to a single `run()` + `buildTokenFeed()` flow:
+   - Detects the current market narrative (`ai | safe_haven | defi | l2 | staking | neutral`) from Fear & Greed index and Reddit/news headlines via `impit`
+   - Fetches CoinGecko 24h market data for wallet tokens + narrative-focused candidates
+   - Fetches live multi-protocol Uniswap pool snapshots (V2/V3/V4/UniswapX) for each candidate
+   - Applies **goal-first generic rules** in the system prompt (replaced hardcoded per-narrative token lists with dynamic focus based on the user's stated goal)
+   - Writes `researcher/report` to shared memory
+
 2. **Planner** reads `researcher/report` from memory and produces a `TradePlan` (strategy type, conservative constraints, per-agent task list), writing `planner/plan`.
+
 3. **Risk Agent** reads `planner/plan` + `researcher/report` and runs each candidate through honeypot detection, ownership concentration checks, MEV exposure scoring, and more — writing `risk/assessments`.
+
 4. **Strategy Agent** reads all prior memory, picks the highest-scoring safe candidate, and crafts an exact swap calldata spec (`TradeStrategy`), writing `strategy/proposal`.
+
 5. **Critic Agent** reads all memory entries, performs a holistic review, and either approves or rejects with a confidence score + issues list — writing `critic/critique`.
+
 6. **Executor** — if the Critic approved — executes through Uniswap Trading API (`check_approval` → `quote` → `swap`). Runtime safety defaults to simulation because `DRY_RUN=true` by default. The optional `SIMULATION_ONLY` guard can additionally force simulation regardless of `DRY_RUN`.
 
 ---
@@ -338,6 +464,36 @@ and is exposed as `STABLECOIN_SYMBOLS`, `STABLECOIN_ADDRESSES`, and
 - `maxSlippagePct` is hard-clamped after LLM inference; the LLM cannot exceed the configured plan ceiling.
 - The Risk Agent emits typed `RiskFlag[]` with severity (`low | medium | high | critical`); any `critical` flag forces a Critic rejection.
 - The Executor checks both `DRY_RUN` and `SIMULATION_ONLY`; any true value keeps execution in simulation mode.
+
+---
+
+## Recent Changes
+
+### ResearchAgent refactor
+
+- `run()` simplified — removed 4 dead methods, extracted `buildTokenFeed()` for cleaner narrative-driven candidate assembly
+- `core/prompts.ts` — system prompt now uses **goal-first generic rules** instead of hardcoded per-narrative token lists; the active user goal is injected at call time
+- `services/index.ts` — removed stale `fetchGoalFocusSymbols` export
+- `services/coinGeckoMarket.ts` — updated market data fetch to align with new token feed structure
+- `services/poolSnapshots.ts` — fixed edge-case handling for missing pool data
+
+### ZGCompute (`packages/compute`)
+
+- Added `createFineTuningTask()`, `pollFineTuningTask()`, `acknowledgeFineTuneModel()`, and `downloadLoRA()` methods
+- Handles `CannotAcknowledgeSettledDeliverable` gracefully — detects already-settled tasks and skips re-acknowledgement without crashing
+
+### Shared package (`packages/shared`)
+
+- `constants.ts` — added `TOKEN_CLASSIFIER_CATEGORIES`, `FINE_TUNE_MODEL`, `PROVIDER_ADDRESS`, and category-to-token mappings used by both the Researcher and the training script
+- `config.ts` — added `ZG_CHAIN_RPC` and fine-tuning provider config fields
+
+### Scripts
+
+| Script | What's new |
+|--------|------------|
+| `train-model.ts` | Full 0G fine-tuning pipeline: JSONL dataset generation (625 lines, 352 examples, 154 address pairs), TEE task submission, 65s rate-limit retry logic, LoRA download, 86-prompt inference verification. Supports `--skip-train --task-id <uuid>` to resume completed tasks. |
+| `check-model.ts` | Quick smoke-test: lists available 0G inference providers and runs a single classification prompt |
+| `fund-ledger.ts` | Unchanged — top-up helper |
 
 ---
 
