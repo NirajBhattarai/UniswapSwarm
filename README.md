@@ -425,16 +425,98 @@ Every agent writes its output to the shared `BlackboardMemory`. Each write is si
 
 ---
 
-## Blackboard Memory Keys
+## Shared KV Store — How Agents Communicate in Real-Time
 
-| Key                 | Written by | Content                       |
-| ------------------- | ---------- | ----------------------------- |
-| `researcher/report` | Researcher | `ResearchReport` (candidates) |
-| `planner/plan`      | Planner    | `TradePlan`                   |
-| `risk/assessments`  | Risk       | `RiskAssessment[]`            |
-| `strategy/proposal` | Strategy   | `TradeStrategy`               |
-| `critic/critique`   | Critic     | `Critique`                    |
-| `executor/result`   | Executor   | `ExecutionResult`             |
+All six agents share **one `BlackboardMemory` instance** per orchestrator session. The orchestrator constructs it once and injects it into every agent constructor via dependency injection — so every read and write operates on the exact same in-process `Map<string, MemoryEntry>`. There is no network hop or serialisation round-trip between agents within a cycle.
+
+### Data flow
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant O  as Orchestrator
+    participant BB as BlackboardMemory (in-process Map)
+    participant ZG as 0G Storage (async, best-effort)
+    participant R  as Researcher
+    participant P  as Planner
+    participant Ri as Risk
+    participant S  as Strategy
+    participant C  as Critic
+    participant E  as Executor
+
+    O->>BB: new BlackboardMemory(zgStorage, "sessions/<id>")
+    O->>R: new ResearchAgent(memory, …)
+    O->>P: new PlannerAgent(memory)
+    O->>Ri: new RiskAgent(memory, …)
+    O->>S: new StrategyAgent(compute, memory)
+    O->>C: new CriticAgent(memory)
+    O->>E: new ExecutorAgent(memory)
+
+    Note over O,E: Cycle begins — agents run sequentially
+
+    R->>BB: memory.write("researcher/report", …)
+    BB-->>ZG: storage.store("sessions/<id>/researcher/report", …) [async]
+    ZG-->>BB: rootHash (CID)
+
+    P->>BB: memory.contextFor("planner/plan")  ← reads Researcher slot
+    P->>BB: memory.write("planner/plan", …)
+    BB-->>ZG: storage.store(…) [async]
+
+    Ri->>BB: memory.readValue<ResearchReport>("researcher/report")
+    Ri->>BB: memory.readValue<TradePlan>("planner/plan")
+    Ri->>BB: memory.write("risk/assessments", …)
+
+    S->>BB: memory.contextFor("strategy/proposal")  ← reads all 3 prior slots
+    S->>BB: memory.write("strategy/proposal", …)
+
+    C->>BB: memory.contextFor("critic/critique")  ← reads all 4 prior slots
+    C->>BB: memory.write("critic/critique", …)
+
+    E->>BB: memory.readValue<TradeStrategy>("strategy/proposal")
+    E->>BB: memory.readValue<Critique>("critic/critique")
+    E->>BB: memory.write("executor/result", …)
+```
+
+### Key design decisions
+
+| Decision | Detail |
+|----------|--------|
+| **Single shared instance** | One `BlackboardMemory` per session (see `orchestrator.ts → createSessionContext`). Every agent holds a reference to the same object — writes are immediately visible to subsequent agents with zero latency. |
+| **In-process Map, not a remote store** | The backing `cache` is a plain `Map<string, MemoryEntry>`. Reads are synchronous and O(1). There is no Redis, no database, no inter-process call between agents within a cycle. |
+| **Namespaced keys** | Keys follow `<agentId>/<slot>` (e.g. `researcher/report`). The `BlackboardMemory` instance adds a session namespace prefix (`sessions/<sessionId>/`) before calling 0G Storage so on-chain blobs are scoped per session. In-process reads use the short key without the prefix. |
+| **Async 0G Storage write** | Every `memory.write()` fires `storage.store()` concurrently, awaits the root hash, and falls back to a local SHA-256 if 0G is unreachable — so a storage outage never stalls the agent pipeline. |
+| **LLM context injection** | `memory.contextFor(excludeKey)` formats all prior entries as a Markdown block (`## Shared swarm memory (previous agents)` / `### <role>\n<payload>`) and appends it to the agent's system/user prompt. Agents pass their own write key as `excludeKey` so they never read their own (yet-to-be-written) slot. |
+| **Typed reads** | `memory.readValue<T>(key)` returns the stored value cast to `T` (or `undefined`). Agents use this for structured programmatic access (e.g. `memory.readValue<Critique>("critic/critique")`), while `contextFor()` is used for raw LLM prompt assembly. |
+| **Cross-session isolation** | Each session has its own `SessionContext` (and therefore its own `BlackboardMemory` Map). Sessions are stored in `orchestrator.sessionContexts: Map<sessionId, SessionContext>` and never share memory. |
+
+### KV schema
+
+| Key                         | Written by  | TypeScript type        | Read by                   |
+| --------------------------- | ----------- | ---------------------- | ------------------------- |
+| `researcher/report`         | Researcher  | `ResearchReport`       | Planner, Risk, Strategy, Critic, Executor |
+| `researcher/wallet_holdings`| Researcher  | `WalletHolding[]`      | Executor                  |
+| `planner/plan`              | Planner     | `TradePlan`            | Risk, Strategy, Critic    |
+| `risk/assessments`          | Risk        | `RiskAssessment[]`     | Strategy, Critic          |
+| `strategy/proposal`         | Strategy    | `TradeStrategy`        | Critic, Executor          |
+| `critic/critique`           | Critic      | `Critique`             | Executor                  |
+| `executor/result`           | Executor    | `ExecutionResult`      | Orchestrator (UI stream)  |
+
+### Reading memory in code
+
+```ts
+// Typed read — structured access (agent-to-agent data)
+const critique = this.memory.readValue<Critique>("critic/critique");
+
+// LLM context block — appended to system/user prompt
+const context = this.memory.contextFor("strategy/proposal");
+// → "## Shared swarm memory (previous agents)\n### Researcher\n…\n### Planner\n…"
+
+// Write — persists to in-process Map + fires async 0G Storage upload
+await this.memory.write("strategy/proposal", "strategy", "Strategy Agent", payload);
+
+// Dump all entries (chronological) — used by orchestrator for UI streaming
+const all = this.memory.readAll(); // MemoryEntry[]
+```
 
 ---
 
