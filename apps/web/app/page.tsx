@@ -7,14 +7,8 @@ import { SwarmAgentOutputs } from "../components/SwarmAgentOutputs";
 import { SwarmChat } from "../components/swarm-chat";
 import { WalletConnectButton } from "../components/wallet/WalletConnectButton";
 import { SwarmHistoryPanel } from "../components/history/SwarmHistoryPanel";
-import { SWARM_AGENTS } from "../lib/swarm-agents";
+import { ManagedWalletCard } from "../components/wallet/ManagedWalletCard";
 import type { SwarmAggregateState } from "../components/types";
-
-function shortAddress(address?: string): string {
-  if (!address) return "";
-  if (address.length < 10) return address;
-  return `${address.slice(0, 6)}…${address.slice(-4)}`;
-}
 
 export default function Home() {
   const [state, setState] = useState<SwarmAggregateState>({});
@@ -37,14 +31,7 @@ export default function Home() {
               <h1 className="text-2xl font-semibold text-[#0b1021]">
                 Uniswap Swarm
               </h1>
-              <div className="flex items-center gap-2">
-                {isConnected && (
-                  <span className="rounded-full border border-emerald-300 bg-emerald-50 px-2.5 py-1 text-[11px] font-semibold text-emerald-700">
-                    {shortAddress(address)}
-                  </span>
-                )}
-                <WalletConnectButton />
-              </div>
+              <WalletConnectButton />
             </div>
             <p className="mt-1 text-sm text-[#57575b]">
               CopilotKit A2A multi-agent cockpit
@@ -53,17 +40,9 @@ export default function Home() {
               Orchestrator → Researcher → Planner → Risk → Strategy → Critic →
               Executor
             </p>
-          </div>
-
-          <div className="flex flex-wrap gap-1.5 border-b border-[#d9dbe5] bg-white/55 px-4 py-3">
-            {SWARM_AGENTS.map((agent) => (
-              <span
-                key={agent.id}
-                className="rounded-full border border-slate-300 bg-white/80 px-2.5 py-0.5 text-[11px] font-semibold text-slate-700"
-              >
-                {agent.emoji} {agent.badge}
-              </span>
-            ))}
+            {isConnected && address && (
+              <ManagedWalletCard connectedAddress={address} />
+            )}
           </div>
 
           {/*
