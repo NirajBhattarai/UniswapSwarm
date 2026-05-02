@@ -8,6 +8,7 @@ import { SwarmChat } from "../components/swarm-chat";
 import { WalletConnectButton } from "../components/wallet/WalletConnectButton";
 import { SwarmHistoryPanel } from "../components/history/SwarmHistoryPanel";
 import { ManagedWalletCard } from "../components/wallet/ManagedWalletCard";
+import { SwarmLogo } from "../components/SwarmLogo";
 import type { SwarmAggregateState } from "../components/types";
 
 export default function Home() {
@@ -28,14 +29,19 @@ export default function Home() {
         <section className="flex h-full w-full max-w-[520px] min-h-0 flex-shrink-0 flex-col overflow-hidden rounded-2xl border-2 border-white bg-white/65 shadow-[0_24px_70px_rgba(27,35,57,0.18)] backdrop-blur-md">
           <div className="border-b border-[#d9dbe5] px-6 py-5">
             <div className="flex items-center justify-between gap-3">
-              <h1 className="text-2xl font-semibold text-[#0b1021]">
-                Uniswap Swarm
-              </h1>
+              <div className="flex items-center gap-2.5">
+                <SwarmLogo size={36} />
+                <div>
+                  <h1 className="text-xl font-semibold leading-tight text-[#0b1021]">
+                    Uniswap Swarm
+                  </h1>
+                  <p className="text-xs text-[#7b7b88] leading-tight">
+                    A2A multi-agent cockpit
+                  </p>
+                </div>
+              </div>
               <WalletConnectButton />
             </div>
-            <p className="mt-1 text-sm text-[#57575b]">
-              CopilotKit A2A multi-agent cockpit
-            </p>
             <p className="mt-2 text-xs text-[#7b7b88]">
               Orchestrator → Researcher → Planner → Risk → Strategy → Critic →
               Executor

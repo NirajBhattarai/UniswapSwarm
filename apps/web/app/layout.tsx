@@ -14,8 +14,18 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Uniswap Swarm Wallet Watch",
-  description: "SSE wallet watch cockpit powered by CopilotKit",
+  metadataBase: new URL(
+    process.env.NEXT_PUBLIC_ORCHESTRATOR_URL ?? "http://localhost:3000",
+  ),
+  title: "Uniswap Swarm",
+  description:
+    "Multi-agent DeFi cockpit — Researcher · Planner · Risk · Strategy · Critic · Executor, powered by 0G and CopilotKit.",
+  icons: { icon: "/icon.svg", shortcut: "/icon.svg" },
+  openGraph: {
+    title: "Uniswap Swarm",
+    description: "Multi-agent DeFi cockpit powered by 0G and CopilotKit.",
+    images: [{ url: "/logo.svg", width: 480, height: 120 }],
+  },
 };
 
 export default function RootLayout({

@@ -1,0 +1,70 @@
+<svg viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="UniswapSwarm">
+  <defs>
+    <filter id="g-xl" x="-80%" y="-80%" width="260%" height="260%"><feGaussianBlur stdDeviation="12"/></filter>
+    <filter id="g-lg" x="-60%" y="-60%" width="220%" height="220%"><feGaussianBlur stdDeviation="7"/></filter>
+    <filter id="g-md" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="4.5"/></filter>
+    <radialGradient id="bg" cx="42%" cy="38%" r="65%">
+      <stop offset="0%" stop-color="#1e1245"/>
+      <stop offset="55%" stop-color="#0f1330"/>
+      <stop offset="100%" stop-color="#07091a"/>
+    </radialGradient>
+    <linearGradient id="hub" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#A78BFA"/><stop offset="55%" stop-color="#8B5CF6"/><stop offset="100%" stop-color="#4338CA"/>
+    </linearGradient>
+    <linearGradient id="hub-hl" x1="0" y1="0" x2="0.2" y2="1">
+      <stop offset="0%" stop-color="white" stop-opacity="0.28"/><stop offset="45%" stop-color="white" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="n0" x1="0.1" y1="0" x2="0.9" y2="1"><stop offset="0%" stop-color="#67E8F9"/><stop offset="100%" stop-color="#0284C7"/></linearGradient>
+    <linearGradient id="n1" x1="0.1" y1="0" x2="0.9" y2="1"><stop offset="0%" stop-color="#C084FC"/><stop offset="100%" stop-color="#7C3AED"/></linearGradient>
+    <linearGradient id="n2" x1="0.1" y1="0" x2="0.9" y2="1"><stop offset="0%" stop-color="#FB7185"/><stop offset="100%" stop-color="#BE123C"/></linearGradient>
+    <linearGradient id="n3" x1="0.1" y1="0" x2="0.9" y2="1"><stop offset="0%" stop-color="#4ADE80"/><stop offset="100%" stop-color="#166534"/></linearGradient>
+    <linearGradient id="n4" x1="0.1" y1="0" x2="0.9" y2="1"><stop offset="0%" stop-color="#FCD34D"/><stop offset="100%" stop-color="#B45309"/></linearGradient>
+    <linearGradient id="n5" x1="0.1" y1="0" x2="0.9" y2="1"><stop offset="0%" stop-color="#93C5FD"/><stop offset="100%" stop-color="#1D4ED8"/></linearGradient>
+    <radialGradient id="nhl" cx="35%" cy="25%" r="60%">
+      <stop offset="0%" stop-color="white" stop-opacity="0.38"/><stop offset="100%" stop-color="white" stop-opacity="0"/>
+    </radialGradient>
+    <clipPath id="clip"><rect width="200" height="200" rx="44"/></clipPath>
+  </defs>
+  <g clip-path="url(#clip)">
+    <rect width="200" height="200" fill="url(#bg)"/>
+    <circle cx="100" cy="100" r="58" fill="#6D28D9" opacity="0.22" filter="url(#g-xl)"/>
+    <ellipse cx="82" cy="65" rx="45" ry="40" fill="#4F46E5" opacity="0.1" filter="url(#g-lg)"/>
+    <polygon points="188,100 144,176 56,176 12,100 56,24 144,24" fill="none" stroke="#6D28D9" stroke-width="0.9" stroke-opacity="0.4" stroke-dasharray="5 5"/>
+    <g fill="none" stroke="#818CF8" stroke-width="0.85" stroke-opacity="0.3">
+      <line x1="100" y1="35" x2="156" y2="68"/><line x1="156" y1="68" x2="156" y2="132"/>
+      <line x1="156" y1="132" x2="100" y2="165"/><line x1="100" y1="165" x2="44" y2="132"/>
+      <line x1="44" y1="132" x2="44" y2="68"/><line x1="44" y1="68" x2="100" y2="35"/>
+    </g>
+    <g fill="none" stroke="#C4B5FD" stroke-width="1.1" stroke-opacity="0.32">
+      <line x1="100" y1="100" x2="100" y2="35"/><line x1="100" y1="100" x2="156" y2="68"/>
+      <line x1="100" y1="100" x2="156" y2="132"/><line x1="100" y1="100" x2="100" y2="165"/>
+      <line x1="100" y1="100" x2="44" y2="132"/><line x1="100" y1="100" x2="44" y2="68"/>
+    </g>
+    <polygon points="130,100 115,126 85,126 70,100 85,74 115,74" fill="#8B5CF6" opacity="0.55" filter="url(#g-xl)"/>
+    <polygon points="130,100 115,126 85,126 70,100 85,74 115,74" fill="url(#hub)"/>
+    <polygon points="130,100 115,126 85,126 70,100 85,74 115,74" fill="url(#hub-hl)" opacity="0.85"/>
+    <polygon points="130,100 115,126 85,126 70,100 85,74 115,74" fill="none" stroke="white" stroke-width="0.7" stroke-opacity="0.2"/>
+    <line x1="82" y1="92" x2="110" y2="92" stroke="white" stroke-width="3" stroke-linecap="round" stroke-opacity="0.9"/>
+    <polyline points="106,86.5 112,92 106,97.5" fill="none" stroke="white" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" stroke-opacity="0.9"/>
+    <line x1="118" y1="108" x2="90" y2="108" stroke="white" stroke-width="3" stroke-linecap="round" stroke-opacity="0.9"/>
+    <polyline points="94,102.5 88,108 94,113.5" fill="none" stroke="white" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" stroke-opacity="0.9"/>
+    <circle cx="100" cy="35" r="21" fill="#22D3EE" opacity="0.3" filter="url(#g-md)"/>
+    <circle cx="156" cy="68" r="21" fill="#A855F7" opacity="0.3" filter="url(#g-md)"/>
+    <circle cx="156" cy="132" r="21" fill="#F43F5E" opacity="0.3" filter="url(#g-md)"/>
+    <circle cx="100" cy="165" r="21" fill="#22C55E" opacity="0.3" filter="url(#g-md)"/>
+    <circle cx="44" cy="132" r="21" fill="#F59E0B" opacity="0.3" filter="url(#g-md)"/>
+    <circle cx="44" cy="68" r="21" fill="#3B82F6" opacity="0.3" filter="url(#g-md)"/>
+    <circle cx="100" cy="35" r="14" fill="url(#n0)"/><circle cx="100" cy="35" r="14" fill="url(#nhl)"/>
+    <text x="100" y="35" text-anchor="middle" dominant-baseline="central" fill="white" font-size="7.5" font-weight="800" font-family="system-ui,sans-serif">Re</text>
+    <circle cx="156" cy="68" r="14" fill="url(#n1)"/><circle cx="156" cy="68" r="14" fill="url(#nhl)"/>
+    <text x="156" y="68" text-anchor="middle" dominant-baseline="central" fill="white" font-size="7.5" font-weight="800" font-family="system-ui,sans-serif">Pl</text>
+    <circle cx="156" cy="132" r="14" fill="url(#n2)"/><circle cx="156" cy="132" r="14" fill="url(#nhl)"/>
+    <text x="156" y="132" text-anchor="middle" dominant-baseline="central" fill="white" font-size="7.5" font-weight="800" font-family="system-ui,sans-serif">Ri</text>
+    <circle cx="100" cy="165" r="14" fill="url(#n3)"/><circle cx="100" cy="165" r="14" fill="url(#nhl)"/>
+    <text x="100" y="165" text-anchor="middle" dominant-baseline="central" fill="white" font-size="7.5" font-weight="800" font-family="system-ui,sans-serif">St</text>
+    <circle cx="44" cy="132" r="14" fill="url(#n4)"/><circle cx="44" cy="132" r="14" fill="url(#nhl)"/>
+    <text x="44" y="132" text-anchor="middle" dominant-baseline="central" fill="white" font-size="7.5" font-weight="800" font-family="system-ui,sans-serif">Cr</text>
+    <circle cx="44" cy="68" r="14" fill="url(#n5)"/><circle cx="44" cy="68" r="14" fill="url(#nhl)"/>
+    <text x="44" y="68" text-anchor="middle" dominant-baseline="central" fill="white" font-size="7.5" font-weight="800" font-family="system-ui,sans-serif">Ex</text>
+  </g>
+</svg>
