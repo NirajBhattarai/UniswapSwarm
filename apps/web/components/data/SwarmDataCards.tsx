@@ -65,6 +65,16 @@ const formatUsd = (value?: number) =>
       }).format(value)
     : "—";
 
+/**
+ * Common USD-pegged stablecoin symbols used to auto-select a source token.
+ * Intentionally kept as a plain Set to avoid a shared-package import in a
+ * client component.
+ */
+const STABLE_SYMBOLS = new Set([
+  "USDC", "USDT", "DAI", "FRAX", "TUSD", "BUSD", "LUSD", "USDP",
+  "GUSD", "FDUSD", "PYUSD", "CRVUSD", "GHO", "USDM", "DOLA", "SUSD", "MIM",
+]);
+
 // ── Per-agent storage footer ──────────────────────────────────────────────────
 
 const formatHashShortInline = (hash: string): string => {
@@ -77,6 +87,19 @@ const formatBytesInline = (bytes: number): string => {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
 };
+
+function extractTxErrorMessage(error: unknown): string {
+  if (error instanceof Error && error.message) return error.message;
+  if (typeof error === "string") return error;
+  if (typeof error === "object" && error !== null) {
+    const rec = error as Record<string, unknown>;
+    const shortMessage = rec["shortMessage"];
+    if (typeof shortMessage === "string" && shortMessage) return shortMessage;
+    const message = rec["message"];
+    if (typeof message === "string" && message) return message;
+  }
+  return "Swap failed";
+}
 
 /**
  * Shows the 0G Storage writes that this agent produced — rendered at the
@@ -213,6 +236,7 @@ export const SwarmPipelineStageBody: React.FC<{
             data={execution}
             strategy={strategy}
             research={research}
+            openSwap={state.openSwap}
           />
           <StorageFooter writes={agentWrites} />
         </>
@@ -674,7 +698,7 @@ const StrategyCard: React.FC<{ data?: StrategyData }> = ({ data }) => {
           <span className="block text-[10px] uppercase tracking-wide text-violet-600">
             Size
           </span>
-          {formatUsd(data.amountInUsd)}
+          {formatUsd(data.amountInUsd ?? data.expectedOutputUSD)}
         </div>
         <div className="rounded-md bg-white/80 p-2">
           <span className="block text-[10px] uppercase tracking-wide text-violet-600">
@@ -686,13 +710,19 @@ const StrategyCard: React.FC<{ data?: StrategyData }> = ({ data }) => {
           <span className="block text-[10px] uppercase tracking-wide text-violet-600">
             Fee tier
           </span>
-          {data.feeTier !== undefined ? `${data.feeTier} bps` : "—"}
+          {(() => {
+            const fee = data.poolFee ?? data.feeTier;
+            if (fee === undefined) return "—";
+            // poolFee is in millionths (500 = 0.05%, 3000 = 0.30%, 10000 = 1.00%)
+            const pct = fee / 10_000;
+            return `${pct.toFixed(pct < 1 ? 2 : 0)}%`;
+          })()}
         </div>
         <div className="rounded-md bg-white/80 p-2">
           <span className="block text-[10px] uppercase tracking-wide text-violet-600">
             Chain
           </span>
-          {data.chain ?? "—"}
+          {data.chain ?? "Ethereum"}
         </div>
       </div>
       {data.rationale && (
@@ -763,7 +793,9 @@ const ExecutionCard: React.FC<{
   data?: ExecutionData;
   strategy?: StrategyData;
   research?: ResearchData;
-}> = ({ data, strategy, research }) => {
+  /** When true, auto-open the swap modal (triggered by the HITL Swap button). */
+  openSwap?: boolean;
+}> = ({ data, strategy, research, openSwap }) => {
   const { open } = useAppKit();
   const { address, isConnected } = useAppKitAccount();
   const { walletProvider } = useAppKitProvider("eip155");
@@ -781,6 +813,15 @@ const ExecutionCard: React.FC<{
   const [error, setError] = useState<string | null>(null);
   const [txHash, setTxHash] = useState<string | null>(null);
   const [isClient, setIsClient] = useState(false);
+  /** How the source token was chosen — drives the contextual hint in the swap card. */
+  const [tokenInHint, setTokenInHint] = useState<
+    "stable" | "eth" | "strategy" | "manual" | null
+  >(null);
+
+  // Auto-open the swap modal when the HITL "Swap" button is clicked.
+  useEffect(() => {
+    if (openSwap) setSwapOpen(true);
+  }, [openSwap]);
 
   useEffect(() => {
     setIsClient(true);
@@ -802,21 +843,49 @@ const ExecutionCard: React.FC<{
         const payload = (await res.json()) as WalletPortfolio;
         if (cancelled) return;
         setPortfolio(payload);
-        const preferredByAddress = strategy?.tokenIn
-          ? payload.nonZeroBalances.find(
-              (item) =>
-                item.address.toLowerCase() === strategy.tokenIn?.toLowerCase(),
-            )
-          : undefined;
-        const preferredBySymbol = strategy?.tokenInSymbol
-          ? payload.nonZeroBalances.find(
-              (item) =>
-                item.symbol.toLowerCase() ===
-                strategy.tokenInSymbol?.toLowerCase(),
-            )
-          : undefined;
+
+        // ── Smart tokenIn selection ──────────────────────────────────────────
+        // Priority 1: stablecoin with the largest balance (user funds a swap
+        //   from idle stable holdings → best UX and matches strategy guidance).
+        const stableHolding = payload.nonZeroBalances
+          .filter((item) => STABLE_SYMBOLS.has(item.symbol.toUpperCase()))
+          .sort((a, b) => Number(b.balance) - Number(a.balance))[0];
+
+        // Priority 2: ETH or WETH if no stablecoin is held.
+        const ethHolding =
+          !stableHolding
+            ? payload.nonZeroBalances.find((item) =>
+                ["ETH", "WETH"].includes(item.symbol.toUpperCase()),
+              )
+            : undefined;
+
+        // Priority 3: fall back to the strategy agent's suggested tokenIn.
+        const preferredByAddress =
+          !stableHolding && !ethHolding && strategy?.tokenIn
+            ? payload.nonZeroBalances.find(
+                (item) =>
+                  item.address.toLowerCase() ===
+                  strategy.tokenIn?.toLowerCase(),
+              )
+            : undefined;
+        const preferredBySymbol =
+          !stableHolding && !ethHolding && !preferredByAddress && strategy?.tokenInSymbol
+            ? payload.nonZeroBalances.find(
+                (item) =>
+                  item.symbol.toLowerCase() ===
+                  strategy.tokenInSymbol?.toLowerCase(),
+              )
+            : undefined;
+
+        // Priority 4: leave blank so the user must pick manually.
         const first =
-          preferredByAddress ?? preferredBySymbol ?? payload.nonZeroBalances[0];
+          stableHolding ?? ethHolding ?? preferredByAddress ?? preferredBySymbol ?? null;
+
+        // Record how the selection was made for the contextual hint banner.
+        if (stableHolding) setTokenInHint("stable");
+        else if (ethHolding) setTokenInHint("eth");
+        else if (preferredByAddress ?? preferredBySymbol) setTokenInHint("strategy");
+        else setTokenInHint("manual");
 
         if (first && !selectedToken) {
           setSelectedToken(first.address);
@@ -946,6 +1015,12 @@ const ExecutionCard: React.FC<{
 
       const provider = new BrowserProvider(walletProvider as any);
       const signer = await provider.getSigner();
+      const network = await provider.getNetwork();
+      if (network.chainId !== BigInt(1)) {
+        throw new Error(
+          "Wrong network: switch wallet to Ethereum Mainnet before approving this swap.",
+        );
+      }
 
       // ── Step 2: ERC20 → Permit2 approval (if needed) ──────────────────────
       if (preparePayload.approvalTx) {
@@ -1002,13 +1077,26 @@ const ExecutionCard: React.FC<{
 
       // ── Step 5a: Classic swap — broadcast the swap tx ──────────────────────
       if (executePayload.swapTx) {
-        const swapTx = await signer.sendTransaction({
+        const swapRequest = {
           to: executePayload.swapTx.to,
           data: executePayload.swapTx.data,
           value: executePayload.swapTx.value
             ? BigInt(executePayload.swapTx.value)
             : BigInt(0),
-        });
+        };
+
+        try {
+          const estimatedGas = await signer.estimateGas(swapRequest);
+          // Keep a small safety margin to avoid borderline underestimation.
+          (swapRequest as { gasLimit?: bigint }).gasLimit =
+            (estimatedGas * BigInt(120)) / BigInt(100);
+        } catch (estimateError) {
+          throw new Error(
+            `Swap preflight failed: ${extractTxErrorMessage(estimateError)}`,
+          );
+        }
+
+        const swapTx = await signer.sendTransaction(swapRequest);
         await swapTx.wait();
         setTxHash(swapTx.hash);
         return;
@@ -1024,7 +1112,7 @@ const ExecutionCard: React.FC<{
 
       throw new Error("Swap failed: no transaction or order hash returned");
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Swap failed");
+      setError(extractTxErrorMessage(e));
     } finally {
       setSubmitting(false);
     }
@@ -1133,6 +1221,22 @@ const ExecutionCard: React.FC<{
                   <label className="mb-1 block text-[11px] font-semibold text-slate-600">
                     From wallet asset
                   </label>
+                  {/* Contextual hint showing why this token was auto-selected */}
+                  {portfolio && tokenInHint === "stable" && chosen && (
+                    <p className="mb-2 rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1 text-[10px] text-emerald-700">
+                      Using your <span className="font-semibold">{chosen.symbol}</span> stablecoin balance as source — swap into the high-confidence asset below.
+                    </p>
+                  )}
+                  {portfolio && tokenInHint === "eth" && chosen && (
+                    <p className="mb-2 rounded-md border border-blue-200 bg-blue-50 px-2 py-1 text-[10px] text-blue-700">
+                      No stablecoins found — using your <span className="font-semibold">{chosen.symbol}</span> balance as source.
+                    </p>
+                  )}
+                  {portfolio && tokenInHint === "manual" && (
+                    <p className="mb-2 rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-[10px] text-amber-700">
+                      No stablecoins or ETH detected in wallet — please select a source token below.
+                    </p>
+                  )}
                   <select
                     value={selectedToken}
                     onChange={(e) => setSelectedToken(e.target.value)}

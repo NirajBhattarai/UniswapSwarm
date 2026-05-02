@@ -108,11 +108,16 @@ export type StrategyData = {
   tokenInSymbol?: string;
   tokenOutSymbol?: string;
   amountInUsd?: number;
+  /** USD value of the expected output — set by StrategyAgent (field: expectedOutputUSD). */
+  expectedOutputUSD?: number;
+  estimatedGasUSD?: number;
   amountInWei?: string;
   minAmountOutWei?: string;
   amountIn?: string;
   slippagePct?: number;
+  /** Uniswap pool fee in millionths (500 = 0.05%, 3000 = 0.3%, 10000 = 1%). */
   poolFee?: number;
+  /** Legacy alias for poolFee — kept for backwards compatibility. */
   feeTier?: number;
   chain?: string;
   rationale?: string;
@@ -220,4 +225,6 @@ export type SwarmAggregateState = {
   request?: string;
   /** Append-only 0G Storage audit trail aggregated from every agent run. */
   storage?: AgentStorageWrite[];
+  /** Set to true by the HITL Swap button to auto-open the ExecutionCard swap modal. */
+  openSwap?: boolean;
 };
