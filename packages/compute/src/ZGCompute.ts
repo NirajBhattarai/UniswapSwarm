@@ -17,6 +17,19 @@ interface ServiceMeta {
   providerAddress: string;
   endpoint: string;
   model: string;
+  contextLength?: number;
+  maxCompletionTokens?: number;
+}
+
+interface ChatbotService {
+  provider: string;
+  model: string;
+  url?: string;
+  endpoint?: string;
+  modelInfo?: {
+    context_length?: number;
+    max_completion_tokens?: number;
+  };
 }
 
 /**
@@ -38,8 +51,52 @@ export class LedgerLowError extends Error {
   }
 }
 
+/**
+ * Thrown when provider sub-account funding is required before inference can run.
+ * This is different from `LedgerLowError`: it can happen after init when the
+ * provider sub-account has not been funded yet.
+ */
+export class SubAccountFundingError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "SubAccountFundingError";
+  }
+}
+
 // Minimum ledger OG required before an agent session can start.
-const MIN_LEDGER_OG = 3;
+// Set to 5 to account for provider sub-account auto-funding (~2 OG transfer-fund fee)
+// plus a buffer to ensure inference operations succeed after sub-account initialization.
+const MIN_LEDGER_OG = 5;
+
+function normalizeErrMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+function isSubAccountFundingErrorMessage(message: string): boolean {
+  return (
+    /sub-account not found/i.test(message) ||
+    /initialize it by transferring funds/i.test(message) ||
+    /transfer-fund/i.test(message) ||
+    /requires\s+[\d.]+\s*0g\s+in your ledger/i.test(message) ||
+    /ledger available balance is insufficient/i.test(message)
+  );
+}
+
+function isSignerNotAcknowledgedMessage(message: string): boolean {
+  return /service not acknowledge the tee signer/i.test(message);
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function toSubAccountFundingError(err: unknown): SubAccountFundingError {
+  const message = normalizeErrMessage(err);
+  return new SubAccountFundingError(
+    `0G provider sub-account is not funded yet. ${message} ` +
+      `Fund your ledger/sub-account and retry (example: 0g-compute-cli deposit --amount 2).`,
+  );
+}
 
 // ─── ZGCompute ─────────────────────────────────────────────────────────────────
 
@@ -69,40 +126,38 @@ export class ZGCompute {
     const broker = this.broker;
 
     const cfg = getConfig();
-    const services = await broker.inference.listService();
+    const services = await broker.inference.listServiceWithDetail(0, 50, true);
     const chatbots = services.filter(
       (s: { serviceType: string }) => s.serviceType === "chatbot",
-    );
+    ) as ChatbotService[];
     if (chatbots.length === 0)
       throw new Error("[Compute] No chatbot services found on 0G network");
 
-    const wantProvider = cfg.ZG_INFERENCE_PROVIDER.trim().toLowerCase();
-    let chosen = chatbots[0] as {
-      provider: string;
-      model: string;
-      url?: string;
-      endpoint?: string;
-    };
-    if (wantProvider) {
-      const match = chatbots.find(
-        (s: { provider: string }) =>
-          (s.provider as string).toLowerCase() === wantProvider,
-      ) as typeof chosen | undefined;
-      if (match) {
-        chosen = match;
-        logger.info(
-          `[Compute] Using ZG_INFERENCE_PROVIDER=${chosen.provider.slice(0, 14)}…`,
-        );
-      } else {
+    const orderedCandidates = chatbots;
+
+    let chosen = orderedCandidates[0] as ChatbotService;
+    let acknowledgedChosen = false;
+    for (const candidate of orderedCandidates) {
+      try {
+        const status = (await broker.inference.checkProviderSignerStatus(
+          candidate.provider,
+        )) as { isAcknowledged?: boolean };
+        if (status?.isAcknowledged) {
+          chosen = candidate;
+          acknowledgedChosen = true;
+          break;
+        }
+      } catch (err) {
         logger.warn(
-          `[Compute] ZG_INFERENCE_PROVIDER not found among chatbots — ` +
-            `using first service. Available: ${chatbots
-              .map((s: { provider: string }) =>
-                (s.provider as string).slice(0, 14),
-              )
-              .join(", ")}`,
+          `[Compute] Provider signer status check failed for ${candidate.provider.slice(0, 10)}…: ${normalizeErrMessage(err)}`,
         );
       }
+    }
+
+    if (!acknowledgedChosen) {
+      logger.warn(
+        "[Compute] No chatbot provider reports an acknowledged TEE signer; requests may fail until the provider is acknowledged by the service owner.",
+      );
     }
 
     // Some service listings include the endpoint URL directly
@@ -149,27 +204,57 @@ export class ZGCompute {
     );
 
     const modelOverride = cfg.ZG_INFERENCE_MODEL.trim();
-    this.service = {
+    const service: ServiceMeta = {
       providerAddress: chosen.provider,
       endpoint: meta.endpoint || listingEndpoint,
       model: modelOverride || meta.model || chosen.model,
+      ...(typeof chosen.modelInfo?.context_length === "number"
+        ? { contextLength: chosen.modelInfo.context_length }
+        : {}),
+      ...(typeof chosen.modelInfo?.max_completion_tokens === "number"
+        ? { maxCompletionTokens: chosen.modelInfo.max_completion_tokens }
+        : {}),
     };
+    this.service = service;
 
     if (modelOverride) {
       logger.info(`[Compute] ZG_INFERENCE_MODEL override → ${modelOverride}`);
     }
 
     logger.info(
-      `[Compute] Ready — endpoint=${this.service.endpoint || "(unknown)"}  model=${this.service.model}`,
+      `[Compute] Ready — endpoint=${service.endpoint || "(unknown)"}  model=${service.model}`,
     );
+    if (service.contextLength || service.maxCompletionTokens) {
+      logger.info(
+        `[Compute] Provider limits — context=${service.contextLength ?? "unknown"} max_completion=${service.maxCompletionTokens ?? "unknown"}`,
+      );
+    }
     console.log(
-      `✅  0G Compute ready — model: \x1b[32m${this.service.model}\x1b[0m  endpoint: ${this.service.endpoint || "(unknown)"}\n`,
+      `✅  0G Compute ready — model: \x1b[32m${service.model}\x1b[0m  endpoint: ${service.endpoint || "(unknown)"}\n`,
     );
+  }
+
+  private resolveMaxTokens(svc: ServiceMeta, opts: InferOptions): number {
+    const cfg = getConfig();
+    const requested = opts.maxTokens ?? cfg.AGENT_MAX_INFER_TOKENS;
+    const remoteCap = svc.maxCompletionTokens ?? svc.contextLength;
+    if (!remoteCap || requested <= remoteCap) {
+      return requested;
+    }
+
+    logger.warn(
+      `[Compute] Clamping maxTokens from ${requested} to provider-advertised cap ${remoteCap}`,
+    );
+    return remoteCap;
   }
 
   // ── Ledger balance ───────────────────────────────────────────────────────────
 
-  /** Returns the current 0G Compute ledger balance in OG tokens, or 0 on error. */
+  /**
+   * Returns the usable 0G Compute ledger balance in OG tokens (availableBalance),
+   * or 0 on error. We prioritize available balance because provider auto-funding
+   * draws from available funds, not total ledger value.
+   */
   async getLedgerBalance(): Promise<number> {
     const broker = this.broker;
     if (!broker) return 0;
@@ -177,9 +262,9 @@ export class ZGCompute {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const ledger = await (broker.ledger.getLedger() as Promise<any>);
       const raw: unknown =
+        ledger?.availableBalance ??
         ledger?.balance ??
         ledger?.totalBalance ??
-        ledger?.availableBalance ??
         ledger?.[0] ??
         0;
       if (typeof raw === "bigint") return parseFloat(ethers.formatEther(raw));
@@ -207,23 +292,33 @@ export class ZGCompute {
   /**
    * Deposits `amount` OG tokens into this wallet's 0G Compute ledger.
    * If no ledger exists yet, one is created with the given balance.
-   * The broker must be initialised first (call `init()` before this, or
-   * call this on a freshly-created broker via `_initBrokerOnly()`).
+   * **Important:** The amount must account for provider sub-account auto-funding,
+   * which requires at least 2 OG available after deposit. Recommend funding with
+   * at least 5 OG to ensure the provider sub-account can be initialized.
    *
-   * @param amount - Amount in OG tokens (not wei).
+   * @param amount - Amount in OG tokens (not wei). Minimum 5 recommended (2+ reserved for provider sub-account).
    */
   async fundLedger(amount: number): Promise<void> {
+    if (amount < 2) {
+      throw new Error(
+        `fundLedger(${amount}): Insufficient amount. ` +
+          `Minimum 2 OG required, but 5+ recommended to account for provider sub-account initialization. ` +
+          `Provider auto-funding needs 2 OG available for transfer-fund operations.`,
+      );
+    }
+
     if (!this.broker) {
       // Initialise broker without running the ledger check so we can top up
       // even when the ledger is currently below MIN_LEDGER_OG.
       await this._initBrokerOnly();
     }
     const broker = this.broker!;
+
     try {
       // Try depositing to an existing ledger first.
       await (broker.ledger.depositFund(amount) as Promise<void>);
       logger.info(
-        `[Compute] Deposited ${amount} OG into ledger for ${this.wallet.address}`,
+        `[Compute] Deposited ${amount} OG into main ledger for ${this.wallet.address}`,
       );
     } catch (depositErr) {
       // If no ledger exists yet, create one.
@@ -238,6 +333,12 @@ export class ZGCompute {
         throw depositErr;
       }
     }
+
+    // Ensure broker is ready for provider sub-account initialization on next inference
+    logger.info(
+      `[Compute] Ledger funded. On next inference, provider sub-account will auto-fund ` +
+        `if 2+ OG is available. If provider sub-account errors occur, fund again with 5+ OG.`,
+    );
   }
 
   /**
@@ -249,6 +350,43 @@ export class ZGCompute {
     this.broker = await createZGComputeNetworkBroker(this.wallet);
   }
 
+  private async getRequestHeadersWithSignerAck(
+    broker: Awaited<ReturnType<typeof createZGComputeNetworkBroker>>,
+    providerAddress: string,
+  ): Promise<Record<string, string>> {
+    // Provider acknowledgment can race for fresh managed wallets.
+    // Retry once before failing the request.
+    let lastErr: unknown;
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      try {
+        await (broker.inference.acknowledgeProviderSigner(
+          providerAddress,
+        ) as Promise<unknown>);
+        const headers = (await broker.inference.getRequestHeaders(
+          providerAddress,
+        )) as unknown as Record<string, string>;
+        return headers;
+      } catch (err) {
+        lastErr = err;
+        const message = normalizeErrMessage(err);
+        if (attempt === 1 && isSignerNotAcknowledgedMessage(message)) {
+          logger.warn(
+            "[Compute] Provider signer not acknowledged yet; retrying header initialization once",
+          );
+          await delay(500);
+          continue;
+        }
+        if (isSubAccountFundingErrorMessage(message)) {
+          throw toSubAccountFundingError(err);
+        }
+        throw err;
+      }
+    }
+    throw lastErr instanceof Error
+      ? lastErr
+      : new Error("[Compute] Unable to initialise provider request headers");
+  }
+
   // ── Non-streaming inference ─────────────────────────────────────────────────
 
   async infer(
@@ -257,23 +395,9 @@ export class ZGCompute {
     opts: InferOptions = {},
   ): Promise<string> {
     const svc = await this.requireInit();
+    const maxTokens = this.resolveMaxTokens(svc, opts);
     const broker =
       this.broker ?? (await createZGComputeNetworkBroker(this.wallet));
-
-    let headers: Record<string, string>;
-    try {
-      await (
-        broker.inference.acknowledgeProviderSigner(
-          svc.providerAddress,
-        ) as Promise<unknown>
-      ).catch(() => null);
-      headers = (await broker.inference.getRequestHeaders(
-        svc.providerAddress,
-      )) as unknown as Record<string, string>;
-    } catch (err) {
-      // Rethrow — LedgerLowError is handled upstream by the orchestrator.
-      throw err;
-    }
 
     const body = JSON.stringify({
       model: svc.model,
@@ -281,28 +405,46 @@ export class ZGCompute {
         { role: "system", content: systemPrompt },
         { role: "user", content: userPrompt },
       ],
-      max_tokens: opts.maxTokens ?? 2048,
+      max_tokens: maxTokens,
       temperature: opts.temperature ?? 0.3,
     });
 
-    const res = await fetch(`${svc.endpoint}/chat/completions`, {
-      method: "POST",
-      headers: { ...headers, "Content-Type": "application/json" },
-      body,
-    });
+    let lastFailure = "[Compute] Inference failed: unknown error";
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      const headers = await this.getRequestHeadersWithSignerAck(
+        broker,
+        svc.providerAddress,
+      );
 
-    if (!res.ok) {
+      const res = await fetch(`${svc.endpoint}/chat/completions`, {
+        method: "POST",
+        headers: { ...headers, "Content-Type": "application/json" },
+        body,
+      });
+
+      if (res.ok) {
+        const json = (await res.json()) as {
+          choices: Array<{ message: { content: string } }>;
+        };
+        const content = json.choices[0]?.message?.content;
+        if (!content)
+          throw new Error("[Compute] Empty response from inference");
+        return content;
+      }
+
       const text = await res.text();
-      throw new Error(`[Compute] Inference failed ${res.status}: ${text}`);
+      lastFailure = `[Compute] Inference failed ${res.status}: ${text}`;
+      if (isSignerNotAcknowledgedMessage(text) && attempt < 3) {
+        logger.warn(
+          `[Compute] Provider signer not acknowledged yet (attempt ${attempt}/3); retrying inference after backoff`,
+        );
+        await delay(1200 * attempt);
+        continue;
+      }
+      throw new Error(lastFailure);
     }
 
-    const json = (await res.json()) as {
-      choices: Array<{ message: { content: string } }>;
-    };
-
-    const content = json.choices[0]?.message?.content;
-    if (!content) throw new Error("[Compute] Empty response from inference");
-    return content;
+    throw new Error(lastFailure);
   }
 
   // ── Streaming inference ─────────────────────────────────────────────────────
@@ -313,23 +455,14 @@ export class ZGCompute {
     opts: InferOptions = {},
   ): AsyncGenerator<string> {
     const svc = await this.requireInit();
+    const maxTokens = this.resolveMaxTokens(svc, opts);
     const broker =
       this.broker ?? (await createZGComputeNetworkBroker(this.wallet));
 
-    let headers: Record<string, string>;
-    try {
-      await (
-        broker.inference.acknowledgeProviderSigner(
-          svc.providerAddress,
-        ) as Promise<unknown>
-      ).catch(() => null);
-      headers = (await broker.inference.getRequestHeaders(
-        svc.providerAddress,
-      )) as unknown as Record<string, string>;
-    } catch (err) {
-      // Rethrow — LedgerLowError is handled upstream by the orchestrator.
-      throw err;
-    }
+    const headers = await this.getRequestHeadersWithSignerAck(
+      broker,
+      svc.providerAddress,
+    );
 
     const body = JSON.stringify({
       model: svc.model,
@@ -338,7 +471,7 @@ export class ZGCompute {
         { role: "system", content: systemPrompt },
         { role: "user", content: userPrompt },
       ],
-      max_tokens: opts.maxTokens ?? 2048,
+      max_tokens: maxTokens,
       temperature: opts.temperature ?? 0.3,
     });
 
@@ -404,7 +537,15 @@ export class ZGCompute {
         opts.onChunk?.(chunk);
       }
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = normalizeErrMessage(err);
+      if (
+        err instanceof SubAccountFundingError ||
+        isSubAccountFundingErrorMessage(message)
+      ) {
+        throw err instanceof SubAccountFundingError
+          ? err
+          : toSubAccountFundingError(err);
+      }
       logger.warn(
         `[Compute] Stream path failed (${message}). Falling back to non-stream inference.`,
       );

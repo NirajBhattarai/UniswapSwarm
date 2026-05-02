@@ -264,6 +264,12 @@ importers:
       '@reown/appkit-adapter-ethers':
         specifier: ^1.8.19
         version: 1.8.19(@ethersproject/sha2@5.8.0)(@types/react@19.2.14)(bufferutil@4.1.0)(ethers@6.16.0(bufferutil@4.1.0)(utf-8-validate@5.0.10))(react@19.2.4)(typescript@5.9.2)(use-sync-external-store@1.6.0(react@19.2.4))(utf-8-validate@5.0.10)(zod@3.25.76)
+      '@swarm/compute':
+        specifier: workspace:*
+        version: link:../../packages/compute
+      '@swarm/shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
       '@xyflow/react':
         specifier: ^12.10.2
         version: 12.10.2(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
@@ -390,6 +396,12 @@ importers:
 
   packages/shared:
     dependencies:
+      '@aws-sdk/client-dynamodb':
+        specifier: ^3.624.0
+        version: 3.1038.0
+      '@aws-sdk/lib-dynamodb':
+        specifier: ^3.624.0
+        version: 3.1038.0(@aws-sdk/client-dynamodb@3.1038.0)
       dotenv:
         specifier: ^16.4.5
         version: 16.6.1

@@ -1,6 +1,14 @@
 import { Indexer, MemData } from "@0gfoundation/0g-ts-sdk";
+import type { TransactionOptions } from "@0gfoundation/0g-ts-sdk";
 import { ethers } from "ethers";
 import { getConfig, logger } from "@swarm/shared";
+
+// Gas limit for the on-chain Flow contract `submit` call.
+// Risk agent writes larger payloads (multi-token assessment arrays with on-chain
+// flags and proxy details) which require more Merkle segments → more gas.
+// 5 M is well within the 0G testnet block limit and handles the biggest payloads.
+const ZG_STORAGE_GAS_LIMIT = BigInt(5_000_000);
+const ZG_TX_OPTS: TransactionOptions = { gasLimit: ZG_STORAGE_GAS_LIMIT };
 
 // ─── ZGStorage ────────────────────────────────────────────────────────────────
 //
@@ -94,6 +102,9 @@ export class ZGStorage {
         file,
         this.chainRpc,
         this.wallet,
+        undefined,   // uploadOpts — use SDK defaults
+        undefined,   // retryOpts  — use SDK defaults
+        ZG_TX_OPTS,  // TransactionOptions: explicit gas limit
       );
       if (err) {
         uploadErr = new Error(err.message);
