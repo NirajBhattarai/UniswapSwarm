@@ -43,6 +43,10 @@ interface SwarmOrchestrationAgentConfig extends AgentConfig {
   walletAddress?: string;
 }
 
+type SessionContext = {
+  sessionId?: string;
+};
+
 /**
  * Configuration helper – picks first available Google/Gemini API key from the
  * conventional env var names so the orchestrator works whichever the user set.
@@ -141,6 +145,7 @@ export class SwarmOrchestrationAgent extends AbstractAgent {
                 toolName,
                 part.args ?? {},
                 connectedWallet,
+                { sessionId: input.threadId ?? input.runId },
               );
               const argsString = JSON.stringify(enrichedArgs);
 
@@ -285,6 +290,7 @@ function enrichA2AToolArgs(
   toolName: string,
   rawArgs: unknown,
   connectedWallet?: string,
+  sessionContext: SessionContext = {},
 ): unknown {
   if (toolName !== A2A_TOOL_NAME) return rawArgs;
   if (!rawArgs || typeof rawArgs !== "object" || Array.isArray(rawArgs)) {
@@ -295,16 +301,22 @@ function enrichA2AToolArgs(
   const task = typeof args.task === "string" ? args.task : "";
   if (!task) return rawArgs;
 
+  const sessionId = sessionContext.sessionId?.trim();
+
   const sanitizedTask = task
+    .replace(/\n?Session:\s*[^\n]+/gi, "")
     .replace(/\n?Wallet:\s*0x[a-fA-F0-9]{40}\b/gi, "")
     .replace(/\n?wallet(?:\s+address)?\s*[:=]\s*0x[a-fA-F0-9]{40}\b/gi, "")
     .trim();
+  const withSession = sessionId
+    ? `${sanitizedTask}\nSession: ${sessionId}`
+    : sanitizedTask;
   if (!connectedWallet) {
-    return { ...args, task: sanitizedTask };
+    return { ...args, task: withSession };
   }
   return {
     ...args,
-    task: `${sanitizedTask}\nWallet: ${connectedWallet}`,
+    task: `${withSession}\nWallet: ${connectedWallet}`,
   };
 }
 

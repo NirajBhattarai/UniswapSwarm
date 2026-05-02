@@ -88,6 +88,8 @@ export const ManagedWalletCard: React.FC<Props> = ({ connectedAddress }) => {
         ok?: boolean;
         ledgerBalance?: number;
         ledgerLow?: boolean;
+        fundedAmount?: number;
+        note?: string;
         error?: string;
       };
       if (!res.ok || payload.error) {
@@ -95,7 +97,11 @@ export const ManagedWalletCard: React.FC<Props> = ({ connectedAddress }) => {
         return;
       }
       const newBalance = payload.ledgerBalance?.toFixed(4) ?? "?";
-      setFundSuccess(`Funded! New ledger balance: ${newBalance} OG`);
+      const successMsg =
+        payload.note
+          ? `Funded ${payload.fundedAmount ?? amount} OG (${payload.note}). Balance: ${newBalance} OG`
+          : `Funded! New ledger balance: ${newBalance} OG`;
+      setFundSuccess(successMsg);
       setFundOpen(false);
       // Refresh card data to reflect new balance
       await fetchWallet();
@@ -315,9 +321,10 @@ export const ManagedWalletCard: React.FC<Props> = ({ connectedAddress }) => {
           {/* Ledger topup prompt */}
           {data.hasMinDeposit && data.ledgerLow && (
             <p className="mt-2 leading-relaxed text-orange-700">
-              Your 0G Compute ledger is low ({"<"}3 OG). Use the{" "}
-              <span className="font-semibold">+ Fund Ledger</span> button above
-              to deposit OG from your managed wallet into the compute ledger.
+              Your 0G Compute ledger is low. Use the{" "}
+              <span className="font-semibold">+ Fund Ledger</span> button to
+              deposit ≥5 OG (includes 2 OG for provider sub-account
+              initialization). Minimum 3 OG required, but 5+ recommended.
             </p>
           )}
         </>

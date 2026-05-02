@@ -12,6 +12,8 @@
   "dependencies": {
     "@aws-sdk/client-dynamodb": "^3.1038.0",
     "@aws-sdk/lib-dynamodb": "^3.1038.0",
+    "@swarm/compute": "workspace:*",
+    "@swarm/shared": "workspace:*",
     "@a2a-js/sdk": "^0.3.13",
     "@ag-ui/a2a-middleware": "0.0.2",
     "@ag-ui/client": "0.0.40",
