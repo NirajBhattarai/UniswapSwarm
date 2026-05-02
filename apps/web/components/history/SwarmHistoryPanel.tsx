@@ -44,13 +44,59 @@ function formatTs(ts?: number | null): string {
 function cycleStateToAggregate(
   state: PersistedCycleState,
 ): SwarmAggregateState {
+  // Restore a meaningful execution record even when the executor never ran
+  // server-side (user-signed flow: the swap was signed via the wallet in the
+  // browser, not by the backend executor agent).
+  let execution = state.execution;
+  if (!execution && state.strategy) {
+    const s = state.strategy as {
+      tokenInSymbol?: string;
+      tokenOutSymbol?: string;
+    };
+    execution = {
+      success: false,
+      dryRun: false,
+      txHash: null,
+      pair:
+        s.tokenInSymbol && s.tokenOutSymbol
+          ? `${s.tokenInSymbol} → ${s.tokenOutSymbol}`
+          : undefined,
+      rationale: "Swap was ready for wallet signature (user-signed flow).",
+    };
+  } else if (execution) {
+    // Normalise backend ExecutionResult → frontend ExecutionData.
+    // The backend shape includes `error` but not `rationale`/`pair`.
+    const raw = execution as typeof execution & {
+      error?: string;
+      amountIn?: string;
+      amountOut?: string | null;
+    };
+    const strat = state.strategy as
+      | { tokenInSymbol?: string; tokenOutSymbol?: string }
+      | undefined;
+    execution = {
+      success: execution.success,
+      dryRun: execution.dryRun,
+      txHash: execution.txHash ?? null,
+      rationale: raw.error
+        ? `Error: ${raw.error}`
+        : raw.amountIn
+          ? `Swapped ${raw.amountIn}${raw.amountOut ? ` → ${raw.amountOut}` : ""}`
+          : undefined,
+      pair:
+        strat?.tokenInSymbol && strat?.tokenOutSymbol
+          ? `${strat.tokenInSymbol} → ${strat.tokenOutSymbol}`
+          : undefined,
+    };
+  }
+
   return {
     research: state.research,
     plan: state.plan,
     risk: state.riskAssessments,
     strategy: state.strategy,
     critique: state.critique,
-    execution: state.execution,
+    execution,
   };
 }
 
