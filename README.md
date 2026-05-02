@@ -52,7 +52,6 @@ flowchart TB
     subgraph SharedInfra["🌐 Infrastructure"]
         ZGCompute["0G Compute\nLLM inference"]
         ZGStorage["0G Storage\nBlackboardMemory\n(shared session state)"]
-        ZGF["0G Fine-tuning\nTEE · LoRA"]
         DynamoDB["DynamoDB\nwallet keys + cycle history"]
         ENSChain["ENS on Sepolia\n*.uniswapswarm.eth\ntext[url] / text[name]"]
         Uniswap["Uniswap SwapRouter02\nEthereum mainnet"]
@@ -100,9 +99,6 @@ flowchart TB
     ResearchAgent --> FearGreed
     ExecutorAgent --> Uniswap
 
-    %% Fine-tuning
-    ZGF -.->|"LoRA adapter\n(token classifier)"| ZGCompute
-
     %% Persistence
     HistoryMW <--> DynamoDB
     ManagedW <-->|"AES-256-GCM encrypted keys"| DynamoDB
@@ -110,7 +106,6 @@ flowchart TB
     style ENSChain fill:#4b2eaa,color:#fff
     style ZGCompute fill:#1a6b3c,color:#fff
     style ZGStorage fill:#1a6b3c,color:#fff
-    style ZGF fill:#1a6b3c,color:#fff
     style Uniswap fill:#ff007a,color:#fff
     style OrchestratorLLM fill:#1967d2,color:#fff
     style A2AMiddleware fill:#1967d2,color:#fff
@@ -131,37 +126,9 @@ All LLM calls go through `@swarm/compute` (`ZGCompute`) — a thin wrapper aroun
 
 All agent outputs are persisted via `@swarm/memory` (`ZGStorage`) to the [0G Storage network](https://docs.0g.ai) for cross-cycle auditability.
 
-### 0G Fine-tuning Pipeline
+### Goal-Category Routing
 
-The `scripts/train-model.ts` script trains a **token classifier LoRA** on the 0G Compute Network's Trusted Execution Environment (TEE). The trained adapter teaches the swarm's inference layer to precisely categorise tokens into `L1 | L2 | Stable | DeFi | RWA | AI` — improving Researcher candidate selection accuracy.
-
-```mermaid
-sequenceDiagram
-    participant S as train-model.ts
-    participant B as 0G Broker (on-chain)
-    participant T as Provider TEE<br/>(Phala Network)
-    participant ZGS as 0G Storage
-    participant I as 0G Inference
-
-    S->>S: Generate JSONL dataset<br/>(625 lines · 352 examples)
-    S->>B: createFineTuningTask()<br/>(Qwen2.5-0.5B-Instruct · LoRA r=8)
-    B->>T: Upload dataset hash + config
-    T->>T: Train 3 epochs<br/>625 samples · bf16 · neftune_α=5
-    T-->>S: poll /task/{id} every 15s
-    T->>B: settleTask() on-chain
-    S->>T: downloadLoRA()
-    T-->>S: lora_model_{taskId}.zip (217 MB)
-    S->>ZGS: store artifact (optional)
-    S->>I: 86 inference verification prompts
-    I-->>S: PASS / FAIL per category
-```
-
-**Training results (task `dfe58ce0`):**
-
-- Model: `Qwen2.5-0.5B-Instruct` · LoRA rank=8, alpha=32, dropout=0.1
-- Dataset: 625 JSONL lines (352 unique examples + 154 address-based pairs)
-- 3 epochs · 237 steps · 209s · train_loss 6.834 → **0.4386** (final epoch step: 0.09)
-- Artifact: `output/token-classifier/lora_model_dfe58ce0-f703-40b4-a3e3-67595ffb60a0.zip`
+Token category handling is now prompt-driven in the Research agent. When the user goal contains category intent (for example: `DeFi`, `L2`, `AI`, `L1`, `RWA`), the Researcher pre-focuses the candidate feed toward matching symbols before ranking.
 
 ---
 
@@ -195,20 +162,16 @@ uniswapswarm/
 │   ├── agent-critic/
 │   └── agent-executor/
 ├── packages/
-│   ├── compute/            # ZGCompute — 0G Compute client + fine-tune task management
+│   ├── compute/            # ZGCompute — 0G Compute client for agent inference
 │   ├── memory/             # BlackboardMemory + ZGStorage — shared state & on-chain audit
-│   ├── shared/             # Config (Zod), types, logger, token classifier constants,
-│   │                       #   stablecoin set, PROVIDER_ADDRESS, FINE_TUNE_MODEL
+│   ├── shared/             # Config (Zod), types, logger, token/stablecoin constants
 │   ├── eslint-config/
 │   └── typescript-config/
 ├── scripts/
-│   ├── train-model.ts      # 0G fine-tuning pipeline: dataset gen → TEE train → LoRA download → verify
-│   ├── check-model.ts      # Quick inference smoke-test against a running 0G provider
 │   ├── fund-ledger.ts      # Fund / top-up the 0G Compute ledger
 │   ├── create-dynamo-tables.ts  # Provision DynamoDB history + wallet tables
 │   └── README.md           # Script-level documentation
 └── output/
-    └── token-classifier/   # Downloaded LoRA artifacts (.zip) + .last-fine-tune-task-id
 ```
 
 Built with [Turborepo](https://turbo.build/) and [pnpm workspaces](https://pnpm.io/workspaces).
@@ -272,13 +235,6 @@ cp .env.example .env
 | `AWS_SECRET_ACCESS_KEY`     | no       | AWS secret access key paired with `AWS_ACCESS_KEY_ID`                                 |
 | `AWS_SESSION_TOKEN`         | no       | AWS session token for temporary credentials (optional)                                |
 
-#### Fine-tuning (`scripts/train-model.ts`)
-
-| Variable         | Description                                                    |
-| ---------------- | -------------------------------------------------------------- |
-| `ZG_PRIVATE_KEY` | Same key used for inference — covers the fine-tune sub-account |
-| `ZG_CHAIN_RPC`   | 0G EVM RPC (testnet only — fine-tuning is testnet-only)        |
-
 #### CopilotKit cockpit / A2A integration
 
 | Variable                             | Required        | Description                                                                                               |
@@ -300,19 +256,11 @@ Before first use, top up your 0G Compute ledger (target: 5 OG, keeps 1 OG reserv
 pnpm tsx scripts/fund-ledger.ts
 ```
 
-### 4. (Optional) Train the token classifier
+### 4. Goal-based token routing
 
-Fine-tune a `Qwen2.5-0.5B-Instruct` LoRA on 0G's TEE to improve Researcher token categorisation:
+No model fine-tuning step is required. Category intent is derived directly from user goals in the Research agent prompt flow.
 
-```sh
-# Full pipeline — generate dataset, submit TEE task, download LoRA, run verification
-npx tsx scripts/train-model.ts
-
-# Resume an existing completed task (skip training, just download + verify)
-npx tsx scripts/train-model.ts --skip-train --task-id <uuid>
-```
-
-See [`scripts/README.md`](./scripts/README.md) for full usage and options.
+See [`scripts/README.md`](./scripts/README.md) for available operational scripts.
 
 ### 5. Build
 
@@ -776,23 +724,17 @@ and is exposed as `STABLECOIN_SYMBOLS`, `STABLECOIN_ADDRESSES`, and
 - `services/coinGeckoMarket.ts` — updated market data fetch to align with new token feed structure
 - `services/poolSnapshots.ts` — fixed edge-case handling for missing pool data
 
-### ZGCompute (`packages/compute`)
-
-- Added `createFineTuningTask()`, `pollFineTuningTask()`, `acknowledgeFineTuneModel()`, and `downloadLoRA()` methods
-- Handles `CannotAcknowledgeSettledDeliverable` gracefully — detects already-settled tasks and skips re-acknowledgement without crashing
-
 ### Shared package (`packages/shared`)
 
-- `constants.ts` — added `TOKEN_CLASSIFIER_CATEGORIES`, `FINE_TUNE_MODEL`, `PROVIDER_ADDRESS`, and category-to-token mappings used by both the Researcher and the training script
-- `config.ts` — added `ZG_CHAIN_RPC` and fine-tuning provider config fields
+- `constants.ts` — centralized token/stablecoin registries and category mappings used by the agents
+- `config.ts` — runtime config for 0G compute/storage, web routing, and optional provider overrides
 
 ### Scripts
 
-| Script           | What's new                                                                                                                                                                                                                                                                 |
-| ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `train-model.ts` | Full 0G fine-tuning pipeline: JSONL dataset generation (625 lines, 352 examples, 154 address pairs), TEE task submission, 65s rate-limit retry logic, LoRA download, 86-prompt inference verification. Supports `--skip-train --task-id <uuid>` to resume completed tasks. |
-| `check-model.ts` | Quick smoke-test: lists available 0G inference providers and runs a single classification prompt                                                                                                                                                                           |
-| `fund-ledger.ts` | Unchanged — top-up helper                                                                                                                                                                                                                                                  |
+| Script           | What's new                            |
+| ---------------- | ------------------------------------- |
+| `fund-ledger.ts` | Unchanged — top-up helper             |
+| `README.md`      | Documents currently supported scripts |
 
 ---
 

@@ -8,8 +8,6 @@
     "format": "prettier --write \"**/*.{ts,tsx,md}\"",
     "check-types": "turbo run check-types",
     "create-tables": "tsx scripts/create-dynamo-tables.ts",
-    "train-model": "tsx scripts/train-model.ts",
-    "check-model": "tsx scripts/check-model.ts",
     "setup-ens": "tsx scripts/setup-ens.ts",
     "approve-ens-delegate": "tsx scripts/approve-ens-delegate.ts",
     "call-agent": "tsx scripts/call-agent.ts"
