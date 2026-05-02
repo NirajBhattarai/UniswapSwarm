@@ -111,7 +111,7 @@ export class CriticAgent {
     const critique = await this.compute.inferJSON<Critique>(
       SYSTEM_PROMPT,
       userPrompt,
-      { maxTokens: 1024, ...opts },
+      opts,
     );
 
     // Hard override: only veto when the selected strategy token itself has

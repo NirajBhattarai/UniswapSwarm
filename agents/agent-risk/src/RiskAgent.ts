@@ -241,7 +241,7 @@ export class RiskAgent {
     const assessment = await this.compute.inferJSON<RiskAssessment>(
       SYSTEM_PROMPT,
       userPrompt,
-      { maxTokens: 1536, ...opts },
+      opts,
     );
 
     // Merge on-chain flags (hard truths the LLM cannot override)

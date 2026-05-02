@@ -160,7 +160,7 @@ export class PlannerAgent {
     const plan = await this.compute.inferJSON<TradePlan>(
       SYSTEM_PROMPT,
       userPrompt,
-      { maxTokens: 2048, ...opts },
+      opts,
     );
 
     // Hard safety caps — LLM cannot relax these
