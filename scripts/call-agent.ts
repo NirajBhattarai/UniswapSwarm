@@ -19,7 +19,7 @@
 import "dotenv/config";
 import { ethers } from "ethers";
 import { AGENT_ENS_NAMES } from "@swarm/shared";
-import { v4 as uuidv4 } from "uuid";
+import { randomUUID } from "node:crypto";
 
 type AgentId = keyof typeof AGENT_ENS_NAMES;
 
@@ -55,7 +55,8 @@ async function resolveAgentUrl(agentId: AgentId): Promise<string> {
 }
 
 async function main() {
-  const args = process.argv.slice(2);
+  const rawArgs = process.argv.slice(2);
+  const args = rawArgs[0] === "--" ? rawArgs.slice(1) : rawArgs;
   const agentId = args[0] as AgentId | undefined;
   const message = args.slice(1).join(" ");
 
@@ -82,7 +83,7 @@ async function main() {
   console.log(`Agent URL : ${agentUrl}`);
   console.log(`Message   : "${message}"\n`);
 
-  const messageId = uuidv4();
+  const messageId = randomUUID();
 
   // A2A JSON-RPC 2.0 — message/send (non-streaming)
   const body = {
