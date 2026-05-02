@@ -100,6 +100,19 @@ function parseJsonArg<T>(raw: unknown): T | null {
   }
 }
 
+function extractTxErrorMessage(error: unknown): string {
+  if (error instanceof Error && error.message) return error.message;
+  if (typeof error === "string") return error;
+  if (typeof error === "object" && error !== null) {
+    const rec = error as Record<string, unknown>;
+    const shortMessage = rec["shortMessage"];
+    if (typeof shortMessage === "string" && shortMessage) return shortMessage;
+    const message = rec["message"];
+    if (typeof message === "string" && message) return message;
+  }
+  return "Transaction failed";
+}
+
 /** Strip the `A2A Agent Response: ` prefix the middleware adds. */
 function unwrapA2AResult(value: unknown): unknown {
   if (typeof value === "string") {
@@ -549,6 +562,12 @@ export const SwarmChat: React.FC<SwarmChatProps> = ({ state, onState }) => {
 
             const ethersProvider = new BrowserProvider(walletProvider as any);
             const signer = await ethersProvider.getSigner();
+            const network = await ethersProvider.getNetwork();
+            if (network.chainId !== BigInt(1)) {
+              throw new Error(
+                "Wrong network: switch wallet to Ethereum Mainnet before approving this swap.",
+              );
+            }
 
             // ── Step 2: ERC20 → Permit2 approval (if needed) ───────────────
             if (preparePayload.approvalTx) {
@@ -647,13 +666,26 @@ export const SwarmChat: React.FC<SwarmChatProps> = ({ state, onState }) => {
               );
             }
 
-            const swapTx = await signer.sendTransaction({
+            const swapRequest = {
               to: executePayload.swapTx.to,
               data: executePayload.swapTx.data,
               value: executePayload.swapTx.value
                 ? BigInt(executePayload.swapTx.value)
                 : BigInt(0),
-            });
+            };
+
+            try {
+              const estimatedGas = await signer.estimateGas(swapRequest);
+              // Keep a small safety margin to avoid borderline underestimation.
+              (swapRequest as { gasLimit?: bigint }).gasLimit =
+                (estimatedGas * BigInt(120)) / BigInt(100);
+            } catch (estimateError) {
+              throw new Error(
+                `Swap preflight failed: ${extractTxErrorMessage(estimateError)}`,
+              );
+            }
+
+            const swapTx = await signer.sendTransaction(swapRequest);
             // Show hash immediately — before waiting for confirmation
             setApprovalTxHashes((prev) => ({ ...prev, [key]: swapTx.hash }));
             await swapTx.wait();
@@ -685,8 +717,7 @@ export const SwarmChat: React.FC<SwarmChatProps> = ({ state, onState }) => {
                 "Swap signed and sent from connected wallet. Do not call Executor Agent again.",
             });
           } catch (error) {
-            const message =
-              error instanceof Error ? error.message : "Swap signing failed";
+            const message = extractTxErrorMessage(error);
             setApprovalErrors((prev) => ({
               ...prev,
               [key]: message,
@@ -710,6 +741,17 @@ export const SwarmChat: React.FC<SwarmChatProps> = ({ state, onState }) => {
           });
         };
 
+        const handleSwap = () => {
+          // Open the ExecutionCard swap modal in the sidebar pipeline panel.
+          onState({ ...state, openSwap: true });
+          // Unblock the orchestrator — user will sign manually via the swap card.
+          respond?.({
+            approved: true,
+            message:
+              "User opened the swap card to execute manually. Do not call Executor Agent.",
+          });
+        };
+
         return (
           <TradeApprovalCard
             strategy={strategy}
@@ -721,6 +763,7 @@ export const SwarmChat: React.FC<SwarmChatProps> = ({ state, onState }) => {
             error={approvalErrors[key] ?? null}
             onApprove={handleApprove}
             onReject={handleReject}
+            onSwap={handleSwap}
           />
         );
       },

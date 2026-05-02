@@ -19,6 +19,9 @@ interface TradeApprovalCardProps {
   error?: string | null;
   onApprove: () => void;
   onReject: () => void;
+  /** When provided, the primary action button says "Swap" and opens the
+   * ExecutionCard swap modal instead of running the inline HITL execution. */
+  onSwap?: () => void;
 }
 
 const formatUsd = (value: number) =>
@@ -39,6 +42,7 @@ export const TradeApprovalCard: React.FC<TradeApprovalCardProps> = ({
   error = null,
   onApprove,
   onReject,
+  onSwap,
 }) => {
   if (!strategy) {
     return (
@@ -237,7 +241,7 @@ export const TradeApprovalCard: React.FC<TradeApprovalCardProps> = ({
       <div className="flex gap-2">
         <button
           type="button"
-          onClick={onApprove}
+          onClick={onSwap ?? onApprove}
           disabled={isApproved || isRejected || isSubmitting}
           className={`flex-1 rounded-lg py-2 text-xs font-semibold ${
             isApproved
@@ -255,7 +259,9 @@ export const TradeApprovalCard: React.FC<TradeApprovalCardProps> = ({
               ? "Confirming…"
               : isSubmitting
                 ? "Sending transaction…"
-                : "Approve & execute"}
+                : onSwap
+                  ? "Swap"
+                  : "Approve & execute"}
         </button>
         <button
           type="button"
