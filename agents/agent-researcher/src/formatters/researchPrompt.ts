@@ -1,4 +1,5 @@
 import {
+  STABLECOIN_SYMBOLS,
   isStablecoin,
   type TokenCandidate,
   type WalletHolding,
@@ -24,6 +25,138 @@ interface BuildResearchPromptArgs {
   narrativeText: string;
   context: string;
   walletHoldings?: WalletHolding[];
+}
+
+type GoalCategory = "L1" | "L2" | "DeFi" | "RWA" | "AI" | "Stable";
+
+const GOAL_CATEGORY_KEYWORDS: Array<{
+  category: GoalCategory;
+  patterns: string[];
+}> = [
+  {
+    category: "DeFi",
+    patterns: [
+      "defi",
+      "dex",
+      "amm",
+      "yield",
+      "lending",
+      "borrow",
+      "perp",
+      "derivatives",
+      "liquid staking",
+    ],
+  },
+  {
+    category: "AI",
+    patterns: [
+      " ai ",
+      "ai token",
+      "ai coin",
+      "artificial intelligence",
+      "machine learning",
+      "agentic",
+      "llm",
+      "gpt",
+      "render",
+      "fetch",
+    ],
+  },
+  {
+    category: "L2",
+    patterns: [
+      "layer 2",
+      "layer2",
+      " l2 ",
+      "rollup",
+      "arbitrum",
+      "optimism",
+      "polygon",
+      "starknet",
+      "zksync",
+      "base",
+    ],
+  },
+  {
+    category: "L1",
+    patterns: [
+      "layer 1",
+      "layer1",
+      " l1 ",
+      "base layer",
+      "store of value",
+      "bitcoin",
+      "ethereum",
+      "solana",
+    ],
+  },
+  {
+    category: "RWA",
+    patterns: [
+      "rwa",
+      "real world asset",
+      "real-world asset",
+      "treasury",
+      "tokenized bond",
+      "gold-backed",
+      "tokenized gold",
+    ],
+  },
+  {
+    category: "Stable",
+    patterns: ["stablecoin", "stable coin", "usd pegged", "usd-pegged"],
+  },
+];
+
+const CATEGORY_SYMBOLS: Record<Exclude<GoalCategory, "Stable">, Set<string>> = {
+  L1: new Set(["ETH", "WETH", "WBTC"]),
+  L2: new Set([
+    "ARB",
+    "OP",
+    "MATIC",
+    "POL",
+    "IMX",
+    "METIS",
+    "BOBA",
+    "STRK",
+    "MANTA",
+    "ZKS",
+  ]),
+  DeFi: new Set(["UNI", "AAVE", "MKR", "CRV", "LINK", "LDO", "RPL"]),
+  RWA: new Set(["ONDO", "PAXG", "XAUT", "MPLX", "CFG"]),
+  AI: new Set(["FET", "RNDR", "OCEAN", "AGIX", "AIOZ", "AKT", "TAO", "GRT"]),
+};
+
+function detectGoalCategory(goal: string): GoalCategory | null {
+  const normalized = ` ${goal.toLowerCase()} `;
+  for (const { category, patterns } of GOAL_CATEGORY_KEYWORDS) {
+    if (patterns.some((pattern) => normalized.includes(pattern))) {
+      return category;
+    }
+  }
+  return null;
+}
+
+function applyGoalCategoryFocus(
+  pools: PoolSnapshot[],
+  goalCategory: GoalCategory | null,
+): PoolSnapshot[] {
+  const sorted = [...pools].sort((a, b) => b.liquidityUSD - a.liquidityUSD);
+  if (!goalCategory) return sorted;
+
+  if (goalCategory === "Stable") {
+    // Stable token-out candidates are blocked by strategy/risk rules.
+    return sorted.filter((p) => !STABLECOIN_SYMBOLS.has(p.tokenSymbol));
+  }
+
+  const symbolSet = CATEGORY_SYMBOLS[goalCategory];
+  const focused = sorted.filter((p) => symbolSet.has(p.tokenSymbol));
+  if (focused.length === 0) return sorted;
+  if (focused.length >= 5) return focused;
+
+  const focusedSymbols = new Set(focused.map((p) => p.tokenSymbol));
+  const fallback = sorted.filter((p) => !focusedSymbols.has(p.tokenSymbol));
+  return [...focused, ...fallback.slice(0, Math.max(0, 10 - focused.length))];
 }
 
 export function buildMarketDataText(
@@ -75,23 +208,24 @@ export function buildResearchPrompt(args: BuildResearchPromptArgs): string {
     walletHoldings,
   } = args;
 
+  const goalCategory = detectGoalCategory(goal);
+  const focusedPools = applyGoalCategoryFocus(pools, goalCategory);
+
   // Send all qualifying pools sorted by liquidityUSD descending so the LLM can
   // evaluate the full opportunity set. No arbitrary row cap — deeper context
   // allows the model to surface more unique non-stablecoin candidates.
-  const compactPools = [...pools]
-    .sort((a, b) => b.liquidityUSD - a.liquidityUSD)
-    .map((p) => ({
-      tokenAddress: p.tokenAddress,
-      tokenSymbol: p.tokenSymbol,
-      tokenName: p.tokenName,
-      baseTokenSymbol: p.baseTokenSymbol,
-      poolAddress: p.poolAddress,
-      protocol: p.protocol,
-      feePct: p.feePct,
-      currentPrice: p.currentPrice,
-      liquidityUSD: p.liquidityUSD,
-      priceLabel: p.priceLabel,
-    }));
+  const compactPools = focusedPools.map((p) => ({
+    tokenAddress: p.tokenAddress,
+    tokenSymbol: p.tokenSymbol,
+    tokenName: p.tokenName,
+    baseTokenSymbol: p.baseTokenSymbol,
+    poolAddress: p.poolAddress,
+    protocol: p.protocol,
+    feePct: p.feePct,
+    currentPrice: p.currentPrice,
+    liquidityUSD: p.liquidityUSD,
+    priceLabel: p.priceLabel,
+  }));
 
   let walletSection: string | null = null;
   if (walletHoldings && walletHoldings.length > 0) {
@@ -104,6 +238,9 @@ export function buildResearchPrompt(args: BuildResearchPromptArgs): string {
 
   return [
     `Trading goal: ${goal}`,
+    goalCategory
+      ? `Goal category hint: ${goalCategory} (token feed has been pre-focused toward this category before ranking)`
+      : null,
     `Default constraints: maxSlippage=${cfg.MAX_SLIPPAGE_PCT}%, maxPosition=$${cfg.MAX_POSITION_USDC} USDC, minLiquidity=$${cfg.MIN_LIQUIDITY_USD.toLocaleString()}`,
     `Live Uniswap multi-protocol pool data (${compactPools.length} pools, sorted by liquidityUSD desc) - each entry has a pre-computed \`tokenAddress\` - use it directly as the candidate \`address\` field:\n${JSON.stringify(compactPools)}`,
     marketDataText,

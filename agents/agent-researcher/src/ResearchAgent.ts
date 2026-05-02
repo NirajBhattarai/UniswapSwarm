@@ -6,16 +6,9 @@ import type {
   TokenCandidate,
   WalletHolding,
 } from "@swarm/shared";
-import { ethers } from "ethers";
 import { Impit } from "impit";
 
-import {
-  ERC20_META_ABI,
-  SYMBOL_TO_TOKEN,
-  ADDRESS_TO_SYMBOL,
-  USDC_DEF,
-  SYSTEM_PROMPT,
-} from "./core";
+import { SYMBOL_TO_TOKEN, SYSTEM_PROMPT } from "./core";
 import {
   fetchCoinGeckoMarketData as fetchCoinGeckoMarketDataService,
   fetchDefiLlamaHistoricalChanges,
@@ -29,30 +22,13 @@ import {
   enrichCandidatesWithMarketData,
   filterCandidatesByLiquidity,
 } from "./formatters";
-import {
-  dedupeTokenInputs,
-  normalizeSymbol,
-  normalizeAddress,
-  isPriceValid,
-  toChecksumSafe,
-} from "./utils/index";
-import type {
-  TokenDef,
-  CoinGeckoMarketData,
-  TokenPriceResult,
-  PriceQuoteResponse,
-  PoolSnapshot,
-} from "./core";
-import { requestUniswapQuote } from "./services/uniswapQuote";
+import { normalizeSymbol, toChecksumSafe } from "./utils/index";
+import type { CoinGeckoMarketData, PoolSnapshot } from "./core";
 import { fetchWalletHoldingsAlchemy as fetchWalletHoldingsAlchemyService } from "./services/walletHoldings";
 
-export type { TokenPriceResult, PriceQuoteResponse, CoinGeckoMarketData };
+export type { CoinGeckoMarketData };
 
 const WALLET_HOLDINGS_MEMORY_KEY = "researcher/wallet_holdings";
-const UNISWAP_SOURCE = "uniswap" as const;
-const LIQUIDITY_TOKEN_USDC = "TOKEN/USDC";
-const LIQUIDITY_NONE = "NONE";
-const MAX_INFER_TOKENS = 4096;
 
 export class ResearchAgent {
   static readonly MEMORY_KEY = "researcher/report";
@@ -64,39 +40,9 @@ export class ResearchAgent {
   /** Spoofs Chrome TLS fingerprint + browser headers to bypass bot-detection (Reddit, etc.) */
   private readonly browser = new Impit({ browser: "chrome" });
 
-  // ── Price-cache (15-second TTL to avoid redundant RPC/quote calls) ──────────
-  private readonly CACHE_TTL_MS = 15_000;
-  private readonly priceCache = new Map<
-    string,
-    { result: TokenPriceResult; expiresAt: number }
-  >();
-
-  // Lazy singleton provider — reused across all price + pool methods
-  private _ethProvider: ethers.JsonRpcProvider | null = null;
-
   constructor(compute: ZGCompute, memory: BlackboardMemory) {
     this.compute = compute;
     this.memory = memory;
-  }
-
-  private cachePrice(cacheKey: string, result: TokenPriceResult): void {
-    this.priceCache.set(cacheKey, {
-      result,
-      expiresAt: Date.now() + this.CACHE_TTL_MS,
-    });
-  }
-
-  private buildUnresolvablePriceResult(
-    symbol: string,
-    address: string,
-  ): TokenPriceResult {
-    return {
-      symbol,
-      address,
-      price_usd: null,
-      source: UNISWAP_SOURCE,
-      liquidity_used: LIQUIDITY_NONE,
-    };
   }
 
   private buildResearchPromptInput(params: {
@@ -127,16 +73,6 @@ export class ResearchAgent {
     report.timestamp = Date.now();
     report.dataSource = "uniswap-multi-protocol";
     if (walletHoldings) report.walletHoldings = walletHoldings;
-  }
-
-  private getEthProvider(): ethers.JsonRpcProvider {
-    if (!this._ethProvider) {
-      const { ETH_RPC_URL } = getConfig();
-      this._ethProvider = new ethers.JsonRpcProvider(ETH_RPC_URL, 1, {
-        staticNetwork: true,
-      });
-    }
-    return this._ethProvider;
   }
 
   /**
@@ -193,7 +129,7 @@ export class ResearchAgent {
     const report = await this.compute.inferJSON<ResearchReport>(
       SYSTEM_PROMPT,
       userPrompt,
-      { maxTokens: MAX_INFER_TOKENS, ...opts },
+      opts,
     );
 
     this.finalizeReportMetadata(report, walletHoldings);
@@ -427,228 +363,5 @@ export class ResearchAgent {
     }
 
     return validated;
-  }
-
-  // ── Public: fetch real-time USD prices from Uniswap on-chain data ─────────────
-  // Input:  { tokens: ["ETH", "USDC", "WBTC"] }  (symbols or addresses)
-  // Output: { data: TokenPriceResult[] }
-
-  async fetchTokenPrices(tokens: string[]): Promise<PriceQuoteResponse> {
-    const provider = this.getEthProvider();
-
-    // Deduplicate while preserving input order
-    const ordered = dedupeTokenInputs(tokens);
-
-    // Fetch prices + CoinGecko market data in parallel
-    const [results, marketData] = await Promise.all([
-      Promise.all(
-        ordered.map((input) => this.resolveTokenPrice(input, provider)),
-      ),
-      fetchCoinGeckoMarketDataService(ordered),
-    ]);
-
-    // Merge CoinGecko fields into each result
-    for (const r of results) {
-      const cg = marketData.get(r.symbol);
-      if (cg) {
-        r.volume_24h_usd = cg.volume_24h_usd;
-        r.price_change_24h_pct = cg.price_change_24h_pct;
-        r.market_cap_usd = cg.market_cap_usd;
-        // If Uniswap price failed, fall back to CoinGecko price
-        if (r.price_usd === null) {
-          r.price_usd = cg.price_usd;
-        }
-      }
-    }
-
-    return { data: results };
-  }
-
-  // ── Public: fetch CoinGecko market data for symbols ─────────────────────────
-  // Used by the orchestrator market endpoint.
-  async fetchCoinGeckoMarketData(
-    symbols: string[],
-  ): Promise<Map<string, CoinGeckoMarketData>> {
-    return fetchCoinGeckoMarketDataService(symbols);
-  }
-
-  // ── Resolve a single token input (symbol OR address) ─────────────────────────
-
-  private async resolveTokenPrice(
-    input: string,
-    provider: ethers.JsonRpcProvider,
-  ): Promise<TokenPriceResult> {
-    const upperSymbol = normalizeSymbol(input);
-    const isAddress = /^0x[0-9a-fA-F]{40}$/.test(input);
-
-    // ── Determine token definition ─────────────────────────────────────────────
-    let tokenDef: TokenDef | undefined;
-    let canonicalSymbol: string;
-
-    if (isAddress) {
-      const addressKey = normalizeAddress(input);
-      const knownSymbol = ADDRESS_TO_SYMBOL[addressKey];
-      if (knownSymbol) {
-        canonicalSymbol = knownSymbol;
-        tokenDef = SYMBOL_TO_TOKEN[knownSymbol] as TokenDef;
-      } else {
-        // Unknown address — fetch symbol + decimals from chain
-        try {
-          const erc20 = new ethers.Contract(input, ERC20_META_ABI, provider);
-          const [symbol, decimals] = await Promise.all([
-            erc20.getFunction("symbol")() as Promise<string>,
-            erc20.getFunction("decimals")() as Promise<bigint>,
-          ]);
-          canonicalSymbol = symbol;
-          tokenDef = {
-            address: ethers.getAddress(input),
-            decimals: Number(decimals),
-          };
-        } catch {
-          return this.buildUnresolvablePriceResult(input, input);
-        }
-      }
-    } else {
-      canonicalSymbol = upperSymbol;
-      tokenDef = SYMBOL_TO_TOKEN[upperSymbol] as TokenDef | undefined;
-      if (!tokenDef) {
-        logger.warn(`[Researcher] Unknown token symbol: ${input}`);
-        return this.buildUnresolvablePriceResult(input, "0x");
-      }
-    }
-
-    // Guard: tokenDef must be defined by this point (all undefined paths return early above)
-    if (!tokenDef) {
-      return this.buildUnresolvablePriceResult(input, "0x");
-    }
-
-    // ── Cache check ───────────────────────────────────────────────────────────
-    const cacheKey = tokenDef.address.toLowerCase();
-    const cached = this.priceCache.get(cacheKey);
-    if (cached && Date.now() < cached.expiresAt) {
-      logger.debug(`[Researcher] Cache hit for ${canonicalSymbol}`);
-      return cached.result;
-    }
-
-    // ── Stablecoins (USDC, USDT, DAI) — $1 by definition ───────────────────
-    if (tokenDef.isStablecoin) {
-      const result: TokenPriceResult = {
-        symbol: canonicalSymbol,
-        address: tokenDef.address,
-        price_usd: 1.0,
-        source: UNISWAP_SOURCE,
-        liquidity_used: LIQUIDITY_TOKEN_USDC,
-      };
-      this.cachePrice(cacheKey, result);
-      return result;
-    }
-
-    // ── Uniswap Trading API ────────────────────────────────────────────────────
-    const apiPrice = await this.priceViaTradeApi(tokenDef, canonicalSymbol);
-    if (apiPrice !== null) {
-      const result: TokenPriceResult = {
-        symbol: canonicalSymbol,
-        address: tokenDef.address,
-        price_usd: apiPrice,
-        source: UNISWAP_SOURCE,
-        liquidity_used: LIQUIDITY_TOKEN_USDC,
-      };
-      this.cachePrice(cacheKey, result);
-      return result;
-    }
-
-    // ── Unresolvable ──────────────────────────────────────────────────────────
-    return this.buildUnresolvablePriceResult(canonicalSymbol, tokenDef.address);
-  }
-
-  // ── Uniswap Trading API pricing ───────────────────────────────────────────
-  // Calls POST /v1/quote with EXACT_INPUT: 1 TOKEN → USDC.
-  // Returns null if UNISWAP_API_KEY is absent, token is USDC, or request fails.
-
-  private async priceViaTradeApi(
-    token: TokenDef,
-    symbol: string,
-  ): Promise<number | null> {
-    const { UNISWAP_API_KEY } = getConfig();
-    if (!UNISWAP_API_KEY) return null;
-
-    if (token.address.toLowerCase() === USDC_DEF.address.toLowerCase())
-      return null;
-
-    // The Trading API uses 0x000...000 for native ETH, ERC-20 address otherwise.
-    // For WETH we also pass the ERC-20 address (the API handles wrapping internally).
-    const tokenInAddress = token.address;
-    const amountIn = (BigInt(10) ** BigInt(token.decimals)).toString(); // 1 full token
-
-    try {
-      const response = await requestUniswapQuote({
-        apiKey: UNISWAP_API_KEY,
-        body: {
-          tokenIn: tokenInAddress,
-          tokenOut: USDC_DEF.address,
-          amount: amountIn,
-          type: "EXACT_INPUT",
-          tokenInChainId: 1,
-          tokenOutChainId: 1,
-          // A non-zero placeholder — required by the API but not used for simulation
-          swapper: "0x0000000000000000000000000000000000000001",
-        },
-      });
-
-      if (!response.ok) {
-        logger.warn(
-          `[Researcher] Trade API ${response.status} for ${symbol}: ${await response.text()}`,
-        );
-        return null;
-      }
-
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const body = (await response.json()) as Record<string, any>;
-      const quote = body["quote"] as Record<string, unknown> | undefined;
-      if (!quote) return null;
-
-      // ── CLASSIC routing: quote.output.amount (USDC smallest units) ───────────
-      const classicOutput = (
-        quote["output"] as Record<string, unknown> | undefined
-      )?.["amount"];
-      if (typeof classicOutput === "string") {
-        const price = Number(classicOutput) / 10 ** USDC_DEF.decimals;
-        if (isPriceValid(price, token)) {
-          logger.debug(
-            `[Researcher] Trade API (CLASSIC) ${symbol} → USDC: $${price}`,
-          );
-          return price;
-        }
-      }
-
-      // ── UniswapX/Dutch routing: quote.orderInfo.outputs[0].startAmount ────────
-      const orderInfo = quote["orderInfo"] as
-        | Record<string, unknown>
-        | undefined;
-      const outputs = orderInfo?.["outputs"];
-      if (Array.isArray(outputs) && outputs.length > 0) {
-        const firstOut = outputs[0] as Record<string, unknown>;
-        const startAmt = firstOut["startAmount"];
-        if (typeof startAmt === "string") {
-          const price = Number(startAmt) / 10 ** USDC_DEF.decimals;
-          if (isPriceValid(price, token)) {
-            logger.debug(
-              `[Researcher] Trade API (UniswapX) ${symbol} → USDC: $${price}`,
-            );
-            return price;
-          }
-        }
-      }
-
-      logger.warn(
-        `[Researcher] Trade API returned unrecognised quote shape for ${symbol}`,
-      );
-      return null;
-    } catch (err) {
-      logger.warn(
-        `[Researcher] Trade API fetch error for ${symbol}: ${err instanceof Error ? err.message : String(err)}`,
-      );
-      return null;
-    }
   }
 }
