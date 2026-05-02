@@ -74,8 +74,7 @@ function pickBestTokenIn(holdings: WalletHolding[]): WalletHolding | null {
     (h) =>
       h.symbol.toUpperCase() === "ETH" ||
       h.symbol.toUpperCase() === "WETH" ||
-      h.address.toLowerCase() ===
-        "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
+      h.address.toLowerCase() === "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
   );
   return eth ?? null;
 }
@@ -185,7 +184,9 @@ export class StrategyAgent {
         fallbackTokenIn.balanceFormatted * 0.9,
       );
       const amountIn = ethers.parseUnits(
-        cappedAmount.toFixed(fallbackTokenIn.decimals > 8 ? 8 : fallbackTokenIn.decimals),
+        cappedAmount.toFixed(
+          fallbackTokenIn.decimals > 8 ? 8 : fallbackTokenIn.decimals,
+        ),
         fallbackTokenIn.decimals,
       );
       const expectedWethOut = cfg2.MAX_POSITION_USDC / 3200; // approx ETH price
@@ -202,8 +203,7 @@ export class StrategyAgent {
         poolFee: 500,
         expectedOutputUSD: cfg2.MAX_POSITION_USDC,
         estimatedGasUSD: 5,
-        rationale:
-          `Synthetic fallback: no candidates cleared risk. Swapping ${fallbackTokenIn.symbol}→WETH at the lowest fee tier for pipeline verification.`,
+        rationale: `Synthetic fallback: no candidates cleared risk. Swapping ${fallbackTokenIn.symbol}→WETH at the lowest fee tier for pipeline verification.`,
       };
       await this.memory.write(
         StrategyAgent.MEMORY_KEY,
@@ -332,7 +332,9 @@ export class StrategyAgent {
         overrideTokenIn.balanceFormatted * 0.9,
       );
       const overrideAmountIn = ethers.parseUnits(
-        overrideCapped.toFixed(overrideTokenIn.decimals > 8 ? 8 : overrideTokenIn.decimals),
+        overrideCapped.toFixed(
+          overrideTokenIn.decimals > 8 ? 8 : overrideTokenIn.decimals,
+        ),
         overrideTokenIn.decimals,
       );
       const expectedWethOut = cfg.MAX_POSITION_USDC / 3200;
@@ -349,8 +351,7 @@ export class StrategyAgent {
         poolFee: 500,
         expectedOutputUSD: cfg.MAX_POSITION_USDC,
         estimatedGasUSD: 5,
-        rationale:
-          `Stablecoin → stablecoin swaps are forbidden (1:1 with no upside). Falling back to ${overrideTokenIn.symbol}→WETH at the lowest fee tier.`,
+        rationale: `Stablecoin → stablecoin swaps are forbidden (1:1 with no upside). Falling back to ${overrideTokenIn.symbol}→WETH at the lowest fee tier.`,
       };
       await this.memory.write(
         StrategyAgent.MEMORY_KEY,
@@ -408,8 +409,18 @@ export class StrategyAgent {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify([
-        { jsonrpc: "2.0", id: 1, method: "eth_getBalance", params: [walletAddress, "latest"] },
-        { jsonrpc: "2.0", id: 2, method: "alchemy_getTokenBalances", params: [walletAddress, "erc20"] },
+        {
+          jsonrpc: "2.0",
+          id: 1,
+          method: "eth_getBalance",
+          params: [walletAddress, "latest"],
+        },
+        {
+          jsonrpc: "2.0",
+          id: 2,
+          method: "alchemy_getTokenBalances",
+          params: [walletAddress, "erc20"],
+        },
       ]),
     });
     if (!batchResp.ok) {
@@ -421,9 +432,14 @@ export class StrategyAgent {
     }>;
 
     type TokenBalancesResult = {
-      tokenBalances: Array<{ contractAddress: string; tokenBalance: string | null }>;
+      tokenBalances: Array<{
+        contractAddress: string;
+        tokenBalance: string | null;
+      }>;
     };
-    const ethHex = batchData.find((r) => r.id === 1)?.result as string | undefined;
+    const ethHex = batchData.find((r) => r.id === 1)?.result as
+      | string
+      | undefined;
     const tokenResult = batchData.find((r) => r.id === 2)?.result as
       | TokenBalancesResult
       | undefined;
@@ -488,7 +504,8 @@ export class StrategyAgent {
           const symbol = (meta.result.symbol ?? "").toUpperCase();
           const decimals = meta.result.decimals ?? 18;
           if (!symbol) continue;
-          if (!isStablecoin({ symbol, address: token.contractAddress })) continue;
+          if (!isStablecoin({ symbol, address: token.contractAddress }))
+            continue;
           const raw = BigInt(token.tokenBalance ?? "0");
           const formatted = parseFloat(ethers.formatUnits(raw, decimals));
           if (formatted < 0.01) continue;

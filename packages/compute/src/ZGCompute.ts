@@ -115,7 +115,7 @@ export class ZGCompute {
     const cfg = getConfig();
     this.provider = new ethers.JsonRpcProvider(cfg.ZG_CHAIN_RPC);
     this.wallet = new ethers.Wallet(
-      privateKeyOverride ?? cfg.ZG_PRIVATE_KEY,
+      privateKeyOverride ?? process.env.ZG_PRIVATE_KEY ?? "",
       this.provider,
     );
   }

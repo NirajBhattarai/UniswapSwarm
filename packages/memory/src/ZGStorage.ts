@@ -31,7 +31,7 @@ export class ZGStorage {
     this.chainRpc = cfg.ZG_CHAIN_RPC;
     const provider = new ethers.JsonRpcProvider(cfg.ZG_CHAIN_RPC);
     this.wallet = new ethers.Wallet(
-      privateKeyOverride ?? cfg.ZG_PRIVATE_KEY,
+      privateKeyOverride ?? process.env.ZG_PRIVATE_KEY ?? "",
       provider,
     );
     this.indexer = new Indexer(cfg.ZG_INDEXER_RPC);
@@ -102,9 +102,9 @@ export class ZGStorage {
         file,
         this.chainRpc,
         this.wallet,
-        undefined,   // uploadOpts — use SDK defaults
-        undefined,   // retryOpts  — use SDK defaults
-        ZG_TX_OPTS,  // TransactionOptions: explicit gas limit
+        undefined, // uploadOpts — use SDK defaults
+        undefined, // retryOpts  — use SDK defaults
+        ZG_TX_OPTS, // TransactionOptions: explicit gas limit
       );
       if (err) {
         uploadErr = new Error(err.message);

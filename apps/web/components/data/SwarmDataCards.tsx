@@ -71,8 +71,23 @@ const formatUsd = (value?: number) =>
  * client component.
  */
 const STABLE_SYMBOLS = new Set([
-  "USDC", "USDT", "DAI", "FRAX", "TUSD", "BUSD", "LUSD", "USDP",
-  "GUSD", "FDUSD", "PYUSD", "CRVUSD", "GHO", "USDM", "DOLA", "SUSD", "MIM",
+  "USDC",
+  "USDT",
+  "DAI",
+  "FRAX",
+  "TUSD",
+  "BUSD",
+  "LUSD",
+  "USDP",
+  "GUSD",
+  "FDUSD",
+  "PYUSD",
+  "CRVUSD",
+  "GHO",
+  "USDM",
+  "DOLA",
+  "SUSD",
+  "MIM",
 ]);
 
 // ── Per-agent storage footer ──────────────────────────────────────────────────
@@ -852,12 +867,11 @@ const ExecutionCard: React.FC<{
           .sort((a, b) => Number(b.balance) - Number(a.balance))[0];
 
         // Priority 2: ETH or WETH if no stablecoin is held.
-        const ethHolding =
-          !stableHolding
-            ? payload.nonZeroBalances.find((item) =>
-                ["ETH", "WETH"].includes(item.symbol.toUpperCase()),
-              )
-            : undefined;
+        const ethHolding = !stableHolding
+          ? payload.nonZeroBalances.find((item) =>
+              ["ETH", "WETH"].includes(item.symbol.toUpperCase()),
+            )
+          : undefined;
 
         // Priority 3: fall back to the strategy agent's suggested tokenIn.
         const preferredByAddress =
@@ -869,7 +883,10 @@ const ExecutionCard: React.FC<{
               )
             : undefined;
         const preferredBySymbol =
-          !stableHolding && !ethHolding && !preferredByAddress && strategy?.tokenInSymbol
+          !stableHolding &&
+          !ethHolding &&
+          !preferredByAddress &&
+          strategy?.tokenInSymbol
             ? payload.nonZeroBalances.find(
                 (item) =>
                   item.symbol.toLowerCase() ===
@@ -879,12 +896,17 @@ const ExecutionCard: React.FC<{
 
         // Priority 4: leave blank so the user must pick manually.
         const first =
-          stableHolding ?? ethHolding ?? preferredByAddress ?? preferredBySymbol ?? null;
+          stableHolding ??
+          ethHolding ??
+          preferredByAddress ??
+          preferredBySymbol ??
+          null;
 
         // Record how the selection was made for the contextual hint banner.
         if (stableHolding) setTokenInHint("stable");
         else if (ethHolding) setTokenInHint("eth");
-        else if (preferredByAddress ?? preferredBySymbol) setTokenInHint("strategy");
+        else if (preferredByAddress ?? preferredBySymbol)
+          setTokenInHint("strategy");
         else setTokenInHint("manual");
 
         if (first && !selectedToken) {
@@ -1224,17 +1246,23 @@ const ExecutionCard: React.FC<{
                   {/* Contextual hint showing why this token was auto-selected */}
                   {portfolio && tokenInHint === "stable" && chosen && (
                     <p className="mb-2 rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1 text-[10px] text-emerald-700">
-                      Using your <span className="font-semibold">{chosen.symbol}</span> stablecoin balance as source — swap into the high-confidence asset below.
+                      Using your{" "}
+                      <span className="font-semibold">{chosen.symbol}</span>{" "}
+                      stablecoin balance as source — swap into the
+                      high-confidence asset below.
                     </p>
                   )}
                   {portfolio && tokenInHint === "eth" && chosen && (
                     <p className="mb-2 rounded-md border border-blue-200 bg-blue-50 px-2 py-1 text-[10px] text-blue-700">
-                      No stablecoins found — using your <span className="font-semibold">{chosen.symbol}</span> balance as source.
+                      No stablecoins found — using your{" "}
+                      <span className="font-semibold">{chosen.symbol}</span>{" "}
+                      balance as source.
                     </p>
                   )}
                   {portfolio && tokenInHint === "manual" && (
                     <p className="mb-2 rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-[10px] text-amber-700">
-                      No stablecoins or ETH detected in wallet — please select a source token below.
+                      No stablecoins or ETH detected in wallet — please select a
+                      source token below.
                     </p>
                   )}
                   <select

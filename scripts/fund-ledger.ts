@@ -13,15 +13,25 @@
 import "dotenv/config";
 import { createZGComputeNetworkBroker } from "@0glabs/0g-serving-broker";
 import { ethers } from "ethers";
-import { getConfig } from "@swarm/shared";
 
 const TARGET = 5; // desired ledger balance in OG
 const RESERVE = 1; // minimum OG to keep in wallet
 
 async function main() {
-  const cfg = getConfig();
-  const provider = new ethers.JsonRpcProvider(cfg.ZG_CHAIN_RPC);
-  const wallet = new ethers.Wallet(cfg.ZG_PRIVATE_KEY, provider);
+  // This script uses a dedicated operator key passed via FUND_LEDGER_PRIVATE_KEY.
+  // It is NOT the shared ZG_PRIVATE_KEY — pipeline runs always use managed wallets.
+  const privateKey = process.env.FUND_LEDGER_PRIVATE_KEY?.trim();
+  if (!privateKey || privateKey.length < 64) {
+    console.error(
+      "ERROR: FUND_LEDGER_PRIVATE_KEY is not set or invalid.\n" +
+        "Set it to the 64-char hex private key of the wallet you want to fund from.\n" +
+        "Example: FUND_LEDGER_PRIVATE_KEY=<hex> pnpm tsx scripts/fund-ledger.ts",
+    );
+    process.exit(1);
+  }
+  const chainRpc = process.env.ZG_CHAIN_RPC ?? "https://evmrpc-testnet.0g.ai";
+  const provider = new ethers.JsonRpcProvider(chainRpc);
+  const wallet = new ethers.Wallet(privateKey, provider);
 
   console.log(`Wallet address : ${wallet.address}`);
 

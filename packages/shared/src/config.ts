@@ -4,7 +4,6 @@ import "dotenv/config";
 export const SwarmConfigSchema = z.object({
   // 0G Network
   ZG_CHAIN_RPC: z.string().url().default("https://evmrpc-testnet.0g.ai"),
-  ZG_PRIVATE_KEY: z.string().min(64),
 
   // Ethereum (for Uniswap)
   ETH_RPC_URL: z.string().url().default("https://eth.llamarpc.com"),

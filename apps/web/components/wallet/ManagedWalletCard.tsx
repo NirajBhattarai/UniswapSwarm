@@ -97,10 +97,9 @@ export const ManagedWalletCard: React.FC<Props> = ({ connectedAddress }) => {
         return;
       }
       const newBalance = payload.ledgerBalance?.toFixed(4) ?? "?";
-      const successMsg =
-        payload.note
-          ? `Funded ${payload.fundedAmount ?? amount} OG (${payload.note}). Balance: ${newBalance} OG`
-          : `Funded! New ledger balance: ${newBalance} OG`;
+      const successMsg = payload.note
+        ? `Funded ${payload.fundedAmount ?? amount} OG (${payload.note}). Balance: ${newBalance} OG`
+        : `Funded! New ledger balance: ${newBalance} OG`;
       setFundSuccess(successMsg);
       setFundOpen(false);
       // Refresh card data to reflect new balance

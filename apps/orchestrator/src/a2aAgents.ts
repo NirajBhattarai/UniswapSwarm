@@ -236,7 +236,8 @@ class SwarmAgentExecutor implements AgentExecutor {
     let payload: unknown;
     let runError: string | undefined;
     try {
-      const sessionAlreadyManaged = this.orchestrator.isManagedSession(sessionId);
+      const sessionAlreadyManaged =
+        this.orchestrator.isManagedSession(sessionId);
       if (!walletAddress && !sessionAlreadyManaged) {
         throw new Error(
           "Connected wallet address is required for managed wallet mode. " +
@@ -249,51 +250,51 @@ class SwarmAgentExecutor implements AgentExecutor {
       // from the user's wallet rather than the shared operator key).
       if (walletAddress) {
         try {
-        const managedKey = await getManagedPrivateKey(walletAddress);
-        if (!managedKey) {
-          throw new Error(
-            `No managed wallet is linked to connected wallet ${walletAddress}. ` +
-              `Create/link a managed wallet first, then retry.`,
-          );
-        }
+          const managedKey = await getManagedPrivateKey(walletAddress);
+          if (!managedKey) {
+            throw new Error(
+              `No managed wallet is linked to connected wallet ${walletAddress}. ` +
+                `Create/link a managed wallet first, then retry.`,
+            );
+          }
 
-        // Look up the managed address so we can check the balance
-        const dynamo = getDynamoClient();
-        let managedAddress: string | null = null;
-        if (dynamo) {
-          const item = await dynamo
-            .send(
-              new GetCommand({
-                TableName: process.env.DYNAMODB_WALLETS_TABLE?.trim() ?? "",
-                Key: { connectedAddress: walletAddress.toLowerCase() },
-              }),
-            )
-            .then((r) => r.Item ?? null)
-            .catch(() => null);
-          managedAddress =
-            (item as { managedAddress?: string } | null)?.managedAddress ??
-            null;
-        }
-        if (!managedAddress) {
-          throw new Error(
-            `Managed wallet address not found for connected wallet ${walletAddress}. ` +
-              `No fallback to shared operator is allowed.`,
-          );
-        }
+          // Look up the managed address so we can check the balance
+          const dynamo = getDynamoClient();
+          let managedAddress: string | null = null;
+          if (dynamo) {
+            const item = await dynamo
+              .send(
+                new GetCommand({
+                  TableName: process.env.DYNAMODB_WALLETS_TABLE?.trim() ?? "",
+                  Key: { connectedAddress: walletAddress.toLowerCase() },
+                }),
+              )
+              .then((r) => r.Item ?? null)
+              .catch(() => null);
+            managedAddress =
+              (item as { managedAddress?: string } | null)?.managedAddress ??
+              null;
+          }
+          if (!managedAddress) {
+            throw new Error(
+              `Managed wallet address not found for connected wallet ${walletAddress}. ` +
+                `No fallback to shared operator is allowed.`,
+            );
+          }
 
-        const funded = await isManagedWalletFunded(managedAddress);
-        if (!funded) {
-          throw new Error(
-            `Managed wallet ${managedAddress} is not funded (requires at least 10 A0GI). ` +
-              `No fallback to shared operator is allowed. Please fund and retry.`,
-          );
-        }
+          const funded = await isManagedWalletFunded(managedAddress);
+          if (!funded) {
+            throw new Error(
+              `Managed wallet ${managedAddress} is not funded (requires at least 10 A0GI). ` +
+                `No fallback to shared operator is allowed. Please fund and retry.`,
+            );
+          }
 
-        await this.orchestrator.ensureManagedSession(
-          sessionId,
-          walletAddress,
-          managedKey,
-        );
+          await this.orchestrator.ensureManagedSession(
+            sessionId,
+            walletAddress,
+            managedKey,
+          );
         } catch (managedErr) {
           if (managedErr instanceof LedgerLowError) {
             // Surface ledger-low as a top-level error so the frontend shows the

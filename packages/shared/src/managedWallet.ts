@@ -34,11 +34,7 @@ function getEncryptionKey(): Buffer {
  * Decrypt an encrypted private key using AES-256-GCM.
  * Expects: iv (hex), authTag (hex), encryptedKey (hex)
  */
-function decryptKey(
-  iv: string,
-  authTag: string,
-  encryptedKey: string,
-): string {
+function decryptKey(iv: string, authTag: string, encryptedKey: string): string {
   const key = getEncryptionKey();
   const ivBuf = Buffer.from(iv, "hex");
   const tagBuf = Buffer.from(authTag, "hex");
@@ -49,10 +45,9 @@ function decryptKey(
 
   const decipher = createDecipheriv(ALGORITHM, key, ivBuf);
   decipher.setAuthTag(tagBuf);
-  return Buffer.concat([
-    decipher.update(cipherBuf),
-    decipher.final(),
-  ]).toString("utf8");
+  return Buffer.concat([decipher.update(cipherBuf), decipher.final()]).toString(
+    "utf8",
+  );
 }
 
 /**
@@ -63,7 +58,8 @@ export async function getManagedPrivateKey(
   connectedAddress: string,
 ): Promise<string | null> {
   const encryptionKey = process.env.WALLET_ENCRYPTION_KEY;
-  const tableName = process.env.DYNAMODB_WALLETS_TABLE || "uniswap-swarm-wallets";
+  const tableName =
+    process.env.DYNAMODB_WALLETS_TABLE || "uniswap-swarm-wallets";
   const region = process.env.DYNAMODB_REGION || "us-east-1";
   const accessKeyId = process.env.AWS_ACCESS_KEY_ID;
   const secretAccessKey = process.env.AWS_SECRET_ACCESS_KEY;

@@ -180,7 +180,11 @@ export class SwarmOrchestrator {
     if (this.sessionContexts.has(sessionId)) {
       this.sessionContexts.delete(sessionId);
     }
-    this.getOrCreateSessionContext(sessionId, resources.compute, resources.storage);
+    this.getOrCreateSessionContext(
+      sessionId,
+      resources.compute,
+      resources.storage,
+    );
     this.managedSessions.add(sessionId);
     logger.info(
       `[Orchestrator] Session ${sessionId} bound to managed wallet ${walletAddress}`,
