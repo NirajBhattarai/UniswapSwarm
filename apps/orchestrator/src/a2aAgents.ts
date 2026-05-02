@@ -217,12 +217,10 @@ class SwarmAgentExecutor implements AgentExecutor {
     requestContext: RequestContext,
     eventBus: ExecutionEventBus,
   ): Promise<void> {
-    const userText = extractUserText(requestContext);
-    const walletAddress = extractWalletAddress(userText);
-    // Use a simple hash of the first few chars of the contextId to create
-    // a semi-stable session that will likely be the same for related calls
-    // in a short time window. This is a heuristic approach.
-    const sessionId = extractStableSessionId(requestContext);
+    const rawUserText = extractRawUserText(requestContext);
+    const userText = sanitiseAgentTask(rawUserText);
+    const walletAddress = extractWalletAddress(rawUserText);
+    const sessionId = extractStableSessionId(requestContext, rawUserText);
 
     logger.info(
       `[A2A] ${this.agent.cardName} called with sessionId=${sessionId}${walletAddress ? ` wallet=${walletAddress}` : ""} (contextId=${requestContext.contextId})`,
@@ -238,42 +236,64 @@ class SwarmAgentExecutor implements AgentExecutor {
     let payload: unknown;
     let runError: string | undefined;
     try {
+      const sessionAlreadyManaged = this.orchestrator.isManagedSession(sessionId);
+      if (!walletAddress && !sessionAlreadyManaged) {
+        throw new Error(
+          "Connected wallet address is required for managed wallet mode. " +
+            "Reconnect wallet and retry.",
+        );
+      }
+
       // If the user has a funded managed wallet, bind this session to use
       // their dedicated ZGCompute + ZGStorage (pays for 0G inference/storage
       // from the user's wallet rather than the shared operator key).
       if (walletAddress) {
         try {
-          const managedKey = await getManagedPrivateKey(walletAddress);
-          if (managedKey) {
-            // Look up the managed address so we can check the balance
-            const dynamo = getDynamoClient();
-            let managedAddress: string | null = null;
-            if (dynamo) {
-              const item = await dynamo
-                .send(
-                  new GetCommand({
-                    TableName: process.env.DYNAMODB_WALLETS_TABLE?.trim() ?? "",
-                    Key: { connectedAddress: walletAddress.toLowerCase() },
-                  }),
-                )
-                .then((r) => r.Item ?? null)
-                .catch(() => null);
-              managedAddress =
-                (item as { managedAddress?: string } | null)?.managedAddress ??
-                null;
-            }
-            const funded =
-              managedAddress !== null
-                ? await isManagedWalletFunded(managedAddress)
-                : false;
-            if (funded) {
-              await this.orchestrator.ensureManagedSession(
-                sessionId,
-                walletAddress,
-                managedKey,
-              );
-            }
-          }
+        const managedKey = await getManagedPrivateKey(walletAddress);
+        if (!managedKey) {
+          throw new Error(
+            `No managed wallet is linked to connected wallet ${walletAddress}. ` +
+              `Create/link a managed wallet first, then retry.`,
+          );
+        }
+
+        // Look up the managed address so we can check the balance
+        const dynamo = getDynamoClient();
+        let managedAddress: string | null = null;
+        if (dynamo) {
+          const item = await dynamo
+            .send(
+              new GetCommand({
+                TableName: process.env.DYNAMODB_WALLETS_TABLE?.trim() ?? "",
+                Key: { connectedAddress: walletAddress.toLowerCase() },
+              }),
+            )
+            .then((r) => r.Item ?? null)
+            .catch(() => null);
+          managedAddress =
+            (item as { managedAddress?: string } | null)?.managedAddress ??
+            null;
+        }
+        if (!managedAddress) {
+          throw new Error(
+            `Managed wallet address not found for connected wallet ${walletAddress}. ` +
+              `No fallback to shared operator is allowed.`,
+          );
+        }
+
+        const funded = await isManagedWalletFunded(managedAddress);
+        if (!funded) {
+          throw new Error(
+            `Managed wallet ${managedAddress} is not funded (requires at least 10 A0GI). ` +
+              `No fallback to shared operator is allowed. Please fund and retry.`,
+          );
+        }
+
+        await this.orchestrator.ensureManagedSession(
+          sessionId,
+          walletAddress,
+          managedKey,
+        );
         } catch (managedErr) {
           if (managedErr instanceof LedgerLowError) {
             // Surface ledger-low as a top-level error so the frontend shows the
@@ -284,15 +304,27 @@ class SwarmAgentExecutor implements AgentExecutor {
                 `managed wallet to top up the ledger, then try again.`,
             );
           }
-          logger.warn(
-            `[A2A] Managed wallet setup skipped for ${walletAddress}: ${
-              managedErr instanceof Error
-                ? managedErr.message
-                : String(managedErr)
-            }`,
+          const managedErrMsg =
+            managedErr instanceof Error
+              ? managedErr.message
+              : String(managedErr);
+          if (
+            /sub-account not found|transfer-fund|ledger available balance is insufficient/i.test(
+              managedErrMsg,
+            )
+          ) {
+            throw new Error(
+              `Your managed wallet needs additional 0G Compute funds before inference can run. ` +
+                `Please top up the ledger/sub-account and retry. Details: ${managedErrMsg}`,
+            );
+          }
+          throw new Error(
+            `Managed wallet setup failed for connected wallet ${walletAddress}. ` +
+              `No fallback to shared operator is allowed. Details: ${managedErrMsg}`,
           );
         }
       }
+
       payload = await this.runAgent(userText, sessionId, walletAddress);
     } catch (err) {
       runError = err instanceof Error ? err.message : String(err);
@@ -432,7 +464,7 @@ function estimateJsonByteLength(value: unknown): number {
   }
 }
 
-function extractUserText(requestContext: RequestContext): string {
+function extractRawUserText(requestContext: RequestContext): string {
   const parts = requestContext.userMessage?.parts ?? [];
   const textPart = parts.find(
     (part): part is TextPart =>
@@ -448,17 +480,47 @@ function extractUserText(requestContext: RequestContext): string {
   );
 }
 
+function sanitiseAgentTask(text: string): string {
+  return text
+    .replace(/\n?Session:\s*[^\n]+/gi, "")
+    .replace(/\n?Wallet:\s*0x[a-fA-F0-9]{40}\b/gi, "")
+    .trim();
+}
+
+function extractTaggedSessionId(text: string): string | undefined {
+  const taggedMatch =
+    text.match(/session\s*[:=]\s*([^\n]+)/i) ??
+    text.match(/"sessionId"\s*:\s*"([^"]+)"/i);
+  const sessionId = taggedMatch?.[1]?.trim();
+  return sessionId ? sessionId : undefined;
+}
+
 /**
- * Extract a stable session ID. Since each A2A agent call gets a unique contextId
- * and we can't easily pass custom headers through the A2A middleware, we use
- * a simple heuristic: use "shared-session" for all agents to force memory sharing.
+ * Extract a stable session ID scoped to the user's conversation.
  *
- * This means all conversations share the same memory, which is fine for development
- * but should be improved for production (e.g., by adding session management in the orchestrator).
+ * Priority order:
+ *  1. `Session:` tag in the task text   — explicit chat session from web orchestration
+ *  2. `contextId` from the A2A request  — SDK-provided request context
+ *  3. Fallback: "shared-session"       — dev/legacy behaviour (single shared memory)
+ *
+ * The web orchestration layer stamps a stable chat-level session into each
+ * A2A task. That keeps researcher/planner/risk/... on the same BlackboardMemory
+ * even if the A2A transport changes contextId between individual agent calls.
  */
-function extractStableSessionId(requestContext: RequestContext): string {
-  // For now, use a single shared session for all agents
-  // TODO: Implement proper session management based on user/conversation context
+function extractStableSessionId(
+  requestContext: RequestContext,
+  rawUserText: string,
+): string {
+  const taggedSessionId = extractTaggedSessionId(rawUserText);
+  if (taggedSessionId) {
+    return taggedSessionId;
+  }
+
+  if (requestContext.contextId) {
+    return requestContext.contextId;
+  }
+
+  // Fallback for dev/legacy environments where contextId may be absent.
   return "shared-session";
 }
 

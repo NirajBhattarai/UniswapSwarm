@@ -4,15 +4,14 @@ import { BlackboardMemory, ZGStorage } from "@swarm/memory";
 import type { InferOptions } from "@swarm/compute";
 import { PlannerAgent } from "@swarm/agent-planner";
 import { ResearchAgent } from "@swarm/agent-researcher";
-import type {
-  PriceQuoteResponse,
-  CoinGeckoMarketData,
-} from "@swarm/agent-researcher";
+import type { CoinGeckoMarketData } from "@swarm/agent-researcher";
+import type { PriceQuoteResponse } from "./priceService";
 import { RiskAgent } from "@swarm/agent-risk";
 import { StrategyAgent } from "@swarm/agent-strategy";
 import { CriticAgent } from "@swarm/agent-critic";
 import { ExecutorAgent } from "@swarm/agent-executor";
 import { logger } from "@swarm/shared";
+import { PriceService } from "./priceService";
 import type {
   SwarmCycleState,
   SwarmEvent,
@@ -52,10 +51,16 @@ type SessionContext = {
 // ─────────────────────────────────────────────────────────────────────────────
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Maximum number of session contexts kept in memory before the oldest are evicted.
+const MAX_SESSION_CONTEXTS = 500;
+// Maximum number of completed cycles kept in the in-process history.
+const MAX_CYCLE_HISTORY = 200;
+
 export class SwarmOrchestrator {
   private readonly compute: ZGCompute;
   private readonly zgStorage: ZGStorage;
   private readonly sessionContexts = new Map<string, SessionContext>();
+  private readonly priceService = new PriceService();
   // Per-wallet managed compute/storage instances (one per funded user wallet).
   private readonly managedResources = new Map<
     string,
@@ -68,8 +73,11 @@ export class SwarmOrchestrator {
   private running = false;
 
   constructor() {
-    this.compute = new ZGCompute();
-    this.zgStorage = new ZGStorage();
+    // Managed wallet mode: no shared operator wallet needed.
+    // All operations use per-user managed wallets from DynamoDB.
+    // Compute and storage are initialized lazily per managed wallet in ensureManagedSession().
+    this.compute = undefined as any;
+    this.zgStorage = undefined as any;
   }
 
   private createSessionContext(
@@ -79,6 +87,12 @@ export class SwarmOrchestrator {
   ): SessionContext {
     const compute = computeOverride ?? this.compute;
     const storage = storageOverride ?? this.zgStorage;
+    if (!compute || !storage) {
+      throw new Error(
+        `Session ${sessionId} is not bound to a managed wallet yet. ` +
+          `Bind via ensureManagedSession() before running agents.`,
+      );
+    }
     const memory = new BlackboardMemory(storage, `sessions/${sessionId}`);
     return {
       memory,
@@ -97,7 +111,24 @@ export class SwarmOrchestrator {
     storageOverride?: ZGStorage,
   ): SessionContext {
     const existing = this.sessionContexts.get(sessionId);
-    if (existing) return existing;
+    if (existing) {
+      // Re-insert to mark as most-recently-used (Map preserves insertion order).
+      this.sessionContexts.delete(sessionId);
+      this.sessionContexts.set(sessionId, existing);
+      return existing;
+    }
+
+    // Evict the oldest session if we've hit the cap.
+    if (this.sessionContexts.size >= MAX_SESSION_CONTEXTS) {
+      const oldestKey = this.sessionContexts.keys().next().value;
+      if (oldestKey !== undefined) {
+        this.sessionContexts.delete(oldestKey);
+        this.managedSessions.delete(oldestKey);
+        logger.info(
+          `[Orchestrator] Evicted oldest session context: ${oldestKey}`,
+        );
+      }
+    }
 
     const created = this.createSessionContext(
       sessionId,
@@ -123,12 +154,6 @@ export class SwarmOrchestrator {
     privateKey: string,
   ): Promise<void> {
     if (this.managedSessions.has(sessionId)) return;
-    if (this.sessionContexts.has(sessionId)) {
-      // Session was already created before managed wallet was ready; too late
-      // to inject a different compute — mark as managed so we don't retry.
-      this.managedSessions.add(sessionId);
-      return;
-    }
 
     let resources = this.managedResources.get(walletAddress);
     if (!resources) {
@@ -140,28 +165,22 @@ export class SwarmOrchestrator {
       try {
         await Promise.all([compute.init(), storage.init()]);
       } catch (err) {
-        // Surface LedgerLowError to the caller — don't silently fall back,
-        // so the frontend can show the user a topup prompt.
+        // Never fall back to shared operator resources for connected wallets.
+        // Surface all failures so the caller can show a clear remediation path.
         if (err instanceof LedgerLowError) throw err;
-        logger.warn(
-          `[Orchestrator] Managed compute/storage init failed for ${walletAddress}: ${
-            err instanceof Error ? err.message : String(err)
-          }. Falling back to shared key.`,
-        );
-        this.managedSessions.add(sessionId);
-        return;
+        throw err;
       }
       resources = { compute, storage };
       this.managedResources.set(walletAddress, resources);
     }
 
-    // Pre-create the session context with the managed compute/storage so
-    // the agents use the user's wallet for 0G inference billing + storage.
-    this.getOrCreateSessionContext(
-      sessionId,
-      resources.compute,
-      resources.storage,
-    );
+    // Rebind any pre-existing context to managed resources. This handles
+    // early reads (for example getMemory snapshots) that may have created
+    // a session before wallet binding happened.
+    if (this.sessionContexts.has(sessionId)) {
+      this.sessionContexts.delete(sessionId);
+    }
+    this.getOrCreateSessionContext(sessionId, resources.compute, resources.storage);
     this.managedSessions.add(sessionId);
     logger.info(
       `[Orchestrator] Session ${sessionId} bound to managed wallet ${walletAddress}`,
@@ -188,10 +207,10 @@ export class SwarmOrchestrator {
   }
 
   async init(): Promise<void> {
-    // Initialise 0G Compute and 0G Storage in parallel
-    await Promise.all([this.compute.init(), this.zgStorage.init()]);
+    // Managed wallet mode: no shared operator wallet.
+    // Agents use per-wallet compute/storage initialized on-demand via ensureManagedSession().
     logger.info(
-      "[Orchestrator] All agents ready — 0G Compute + 0G Storage connected",
+      "[Orchestrator] Running in managed wallet mode — agents will use per-wallet 0G compute/storage",
     );
   }
 
@@ -241,6 +260,9 @@ export class SwarmOrchestrator {
     logger.info(`[Swarm] Cycle ${cycleId} done in ${duration}s`);
 
     this.cycleHistory.push(state);
+    if (this.cycleHistory.length > MAX_CYCLE_HISTORY) {
+      this.cycleHistory.splice(0, this.cycleHistory.length - MAX_CYCLE_HISTORY);
+    }
     return state;
   }
 
@@ -257,22 +279,22 @@ export class SwarmOrchestrator {
 
     try {
       // Non-streaming agents emit agent_start / agent_done pairs
-      for (const [agentId, runFn] of await this.buildNonStreamingSteps(
+      const { steps, state: cycleState } = await this.buildNonStreamingSteps(
         cycleId,
         sessionId,
         walletAddress,
-      )) {
+      );
+      for (const [agentId, runFn] of steps) {
         yield { type: "agent_start", cycleId, agentId, ts: ts() };
         await runFn();
         yield { type: "agent_done", cycleId, agentId, ts: ts() };
       }
 
-      const lastCycle = this.cycleHistory[this.cycleHistory.length - 1];
       yield {
         type: "cycle_done",
         cycleId,
         agentId: "orchestrator",
-        data: lastCycle,
+        data: cycleState,
         ts: ts(),
       };
     } catch (err) {
@@ -291,15 +313,21 @@ export class SwarmOrchestrator {
     _cycleId: string,
     sessionId: string,
     walletAddress?: string,
-  ): Promise<Array<[string, () => Promise<void>]>> {
+  ): Promise<{
+    steps: Array<[string, () => Promise<void>]>;
+    state: SwarmCycleState;
+  }> {
     const state: SwarmCycleState = {
       cycleId: _cycleId,
       startedAt: Date.now(),
     };
     const ctx = await this.hydrateSessionMemory(sessionId);
     this.cycleHistory.push(state);
+    if (this.cycleHistory.length > MAX_CYCLE_HISTORY) {
+      this.cycleHistory.splice(0, this.cycleHistory.length - MAX_CYCLE_HISTORY);
+    }
 
-    return [
+    const steps: Array<[string, () => Promise<void>]> = [
       [
         "researcher",
         async () => {
@@ -340,6 +368,8 @@ export class SwarmOrchestrator {
         },
       ],
     ];
+
+    return { steps, state };
   }
 
   // ── Per-agent public runners ────────────────────────────────────────────────
@@ -416,19 +446,18 @@ export class SwarmOrchestrator {
   }
 
   async fetchPrices(
-    sessionId: string,
+    _sessionId: string,
     tokens: string[],
   ): Promise<PriceQuoteResponse> {
-    const ctx = await this.hydrateSessionMemory(sessionId);
-    return ctx.researcher.fetchTokenPrices(tokens);
+    return this.priceService.fetchTokenPrices(tokens);
   }
 
   async fetchMarketData(
     sessionId: string,
     tokens: string[],
   ): Promise<Record<string, CoinGeckoMarketData>> {
-    const ctx = await this.hydrateSessionMemory(sessionId);
-    const map = await ctx.researcher.fetchCoinGeckoMarketData(tokens);
+    await this.hydrateSessionMemory(sessionId);
+    const map = await this.priceService.fetchCoinGeckoMarketData(tokens);
     return Object.fromEntries(map.entries());
   }
 
@@ -454,7 +483,8 @@ export class SwarmOrchestrator {
 
   getMemory(sessionId?: string): MemoryEntry[] {
     if (sessionId) {
-      return this.getOrCreateSessionContext(sessionId).memory.readAll();
+      const existing = this.sessionContexts.get(sessionId);
+      return existing ? existing.memory.readAll() : [];
     }
 
     return Array.from(this.sessionContexts.values())
@@ -472,6 +502,10 @@ export class SwarmOrchestrator {
 
   isRunning(): boolean {
     return this.running;
+  }
+
+  isManagedSession(sessionId: string): boolean {
+    return this.managedSessions.has(sessionId);
   }
 
   setRunning(v: boolean): void {

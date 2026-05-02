@@ -1221,13 +1221,24 @@ export function createServer(
         return;
       }
       const body = req.body as { amount?: unknown };
-      const amount = Number(body.amount);
+      let amount = Number(body.amount);
       if (!Number.isFinite(amount) || amount <= 0) {
         res
           .status(400)
           .json({ error: "amount must be a positive number (OG)" });
         return;
       }
+
+      // Ensure minimum 5 OG is funded to account for provider sub-account auto-funding.
+      // If user requested less, bump it up and warn.
+      if (amount < 5) {
+        logger.warn(
+          `[API] Fund request for ${amount} OG is below recommended 5 OG. ` +
+            `Bumping to 5 OG to ensure provider sub-account can be initialized.`,
+        );
+        amount = 5;
+      }
+
       try {
         const { getManagedPrivateKey } = await import("./managedWallets");
         const { ZGCompute } = await import("@swarm/compute");
@@ -1241,7 +1252,19 @@ export function createServer(
         const compute = new ZGCompute(privateKey);
         await compute.fundLedger(amount);
         const ledgerBalance = await compute.getLedgerBalance();
-        res.json({ ok: true, ledgerBalance, ledgerLow: ledgerBalance < 3 });
+        logger.info(
+          `[API] Funded ledger for ${connectedAddress}: +${amount} OG, new balance=${ledgerBalance.toFixed(4)} OG`,
+        );
+        res.json({
+          ok: true,
+          ledgerBalance,
+          ledgerLow: ledgerBalance < 3,
+          fundedAmount: amount,
+          note:
+            ledgerBalance >= 5
+              ? "Sufficient balance for provider sub-account auto-funding."
+              : `Balance is ${ledgerBalance.toFixed(4)} OG. For provider sub-account initialization, 5+ OG recommended.`,
+        });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         res.status(500).json({ error: msg });
