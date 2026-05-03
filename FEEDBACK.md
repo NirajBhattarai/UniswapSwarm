@@ -154,24 +154,6 @@ The `/quote` response includes a top-level `routing` field that determines which
 
 The routing dispatch documentation and the `GET /orders?swapper=&orderStatus=open` pattern are both already well-covered in the current docs — no further action needed there.
 
----
-
-## Summary
-
-| Feature | Protocol | `uniswap-ai` skill | Trading API |
-| ------- | -------- | ------------------ | ----------- |
-| TWAP price (v3) | ✅ `pool.observe()` + `OracleLibrary` | ❌ Missing | ❌ Missing |
-| TWAP hook (v4) | ⚠️ Requires custom `afterSwap` hook | ❌ No reference example | ❌ N/A |
-| Pool volume / TVL / fees (24h) | ✅ v3 Subgraph `poolDayDatas` | ❌ Missing (listed as future work in `uniswap-driver`) | ❌ Missing |
-| Per-version liquidity depth for a pair | ✅ Derivable from Subgraph + RPC | ❌ Missing | ❌ Missing |
-| Version filter in swap routing (`protocols`) | ✅ Supported | ❌ Not in a skill | ✅ `protocols: ["V3"]` etc. |
-| LP position planning (v2/v3/v4) | ✅ Protocol supports LP | ✅ `liquidity-planner` (deep links) | ✅ `/create`, `/increase`, `/decrease` |
-| Fee claim / LP migration (v3 → v4) | ✅ Protocol supports it | ❌ Missing | ✅ `/claim`, `/migrate` |
-| Classic AMM swap status | ✅ Onchain + RPC | ❌ Missing | ✅ `GET /swaps` |
-| UniswapX order status + open-order query | ✅ Order reactor events | ❌ Missing | ✅ `GET /orders?swapper=&orderStatus=open` |
-| Unified AMM + UniswapX status endpoint | ✅ Both chains support it | ❌ Missing | ❌ No unified endpoint |
-| Routing dispatch docs (`CLASSIC` vs `DUTCH_*`) | ✅ `routing` field on `/quote` | ❌ Not in a skill | ✅ [AMM vs UniswapX Routing guide](https://developers.uniswap.org/docs/trading/swapping-api/amm-vs-uniswapx-routing) |
-
 The four open items — TWAP oracle tooling, pool analytics, per-version liquidity discovery, and a unified status endpoint — are all derivable from data that Uniswap already produces natively. Surfacing them through `uniswap-ai` skills and/or the Trading API would keep the ecosystem self-contained and eliminate the need for third-party data providers in Uniswap-native applications.
 
 We appreciate the quality of work the team has put into `uniswap-ai` and the developer documentation — the recent additions (Liquidity Provisioning API, `uniswap-driver`, `GET /swaps`, `GET /orders`, the AMM vs UniswapX routing guide) are all exactly the kind of first-class developer surface we would like to see expanded.

@@ -8,7 +8,7 @@ import { SwarmChat } from "../components/swarm-chat";
 import { WalletConnectButton } from "../components/wallet/WalletConnectButton";
 import { SwarmHistoryPanel } from "../components/history/SwarmHistoryPanel";
 import { ManagedWalletCard } from "../components/wallet/ManagedWalletCard";
-import { SwarmLogo } from "../components/SwarmLogo";
+import Image from "next/image";
 import type { SwarmAggregateState } from "../components/types";
 
 export default function Home() {
@@ -30,7 +30,7 @@ export default function Home() {
           <div className="border-b border-[#d9dbe5] px-6 py-5">
             <div className="flex items-center justify-between gap-3">
               <div className="flex items-center gap-2.5">
-                <SwarmLogo size={36} />
+                <Image src="/logo.png" alt="UniswapSwarm" width={36} height={36} className="rounded-lg" />
                 <div>
                   <h1 className="text-xl font-semibold leading-tight text-[#0b1021]">
                     Uniswap Swarm
