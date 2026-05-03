@@ -234,6 +234,9 @@ cp .env.example .env
 | `AWS_ACCESS_KEY_ID`         | no       | AWS access key ID used by Dynamo history client (optional; IAM role/chain also works) |
 | `AWS_SECRET_ACCESS_KEY`     | no       | AWS secret access key paired with `AWS_ACCESS_KEY_ID`                                 |
 | `AWS_SESSION_TOKEN`         | no       | AWS session token for temporary credentials (optional)                                |
+| `DYNAMODB_WALLETS_TABLE`    | no       | DynamoDB table name for AES-256-GCM-encrypted managed wallet keys                    |
+| `WALLET_ENCRYPTION_KEY`     | no       | 64-char hex key (32 bytes) used to AES-256-GCM encrypt/decrypt managed wallet private keys. Generate: `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"` |
+| `ZG_INFERENCE_MODEL`        | no       | Override the 0G inference model (e.g. `qwen/qwen-2.5-7b-instruct`). Required on local deployments where the default model is unsupported. |
 
 #### CopilotKit cockpit / A2A integration
 
@@ -247,6 +250,14 @@ cp .env.example .env
 | `A2A_PUBLIC_BASE_URL`                | no              | Public URL embedded in agent cards. Defaults to `http://localhost:${PORT}`.                               |
 | `ORCHESTRATOR_URL`                   | no              | Base URL for A2A agent endpoints (default: `http://localhost:4000`). All agents are accessible as routes. |
 | `RESEARCHER_AGENT_URL`, etc.         | no              | Per-agent URL overrides for the web app. Defaults to `${ORCHESTRATOR_URL}/a2a/agents/<agent-id>`.         |
+
+#### ENS Registry
+
+| Variable                  | Required | Description                                                                       |
+| ------------------------- | -------- | --------------------------------------------------------------------------------- |
+| `ENS_RPC_URL`             | no       | Sepolia JSON-RPC URL (required for any ENS read/write)                            |
+| `ENS_OWNER_PRIVATE_KEY`   | no       | Owner key for `uniswapswarm.eth` — used by `scripts/setup-ens.ts`                 |
+| `ENS_RECORDS_PRIVATE_KEY` | no       | Approved delegate key — preferred for CI and the orchestrator's self-registration |
 
 ### 3. Fund the 0G Compute ledger
 
@@ -311,11 +322,31 @@ Each agent can also be invoked individually. All support both a blocking JSON fo
 
 #### State endpoints
 
-| Method | Path       | Description                                                                 |
-| ------ | ---------- | --------------------------------------------------------------------------- |
-| `GET`  | `/memory`  | Dump blackboard memory (`?sessionId=...` to scope, no query = all sessions) |
-| `GET`  | `/history` | Cycle history currently held in orchestrator process memory                 |
-| `GET`  | `/latest`  | Most recent completed cycle state                                           |
+| Method | Path                                        | Description                                                                                    |
+| ------ | ------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `GET`  | `/memory`                                   | Dump blackboard memory (`?sessionId=...` to scope, no query = all sessions)                    |
+| `GET`  | `/history`                                  | Cycle history for a session (DynamoDB if configured, else in-process)                          |
+| `GET`  | `/history/sessions`                         | List sessions by user (`?walletAddress=` or `x-wallet-address` header; `?limit=` optional)    |
+| `GET`  | `/history/sessions/:sessionId`              | Fetch a single persisted session record                                                        |
+| `GET`  | `/history/sessions/:sessionId/cycles`       | List all cycles within a session (`?limit=` optional)                                          |
+| `GET`  | `/latest`                                   | Most recent completed cycle state                                                              |
+
+#### Wallet endpoints
+
+| Method | Path                                               | Body / Params           | Description                                                                               |
+| ------ | -------------------------------------------------- | ----------------------- | ----------------------------------------------------------------------------------------- |
+| `POST` | `/wallet-watch/stream`                             | `{ walletAddress, prompt? }` | Composite researcher + planner SSE stream focused on a wallet's holdings                 |
+| `GET`  | `/managed-wallet/:connectedAddress/ledger`         | —                       | Decrypt managed key, query 0G Compute ledger balance, return `{ ledgerBalance, ledgerLow }` |
+| `POST` | `/managed-wallet/:connectedAddress/fund-ledger`    | `{ amount: number }`    | Deposit OG tokens into the 0G Compute ledger for the managed wallet (min 5 OG enforced)  |
+
+#### Discovery endpoints
+
+| Method | Path                           | Description                                                          |
+| ------ | ------------------------------ | -------------------------------------------------------------------- |
+| `GET`  | `/api/ens/agents`              | Resolve all agent ENS records from Sepolia (`chain`, `chainId`, `agents[]`) |
+| `GET`  | `/.well-known/agent-card.json` | A2A agent card for the orchestrator (A2A JSON-RPC discovery)         |
+| `POST` | `/a2a/jsonrpc`                 | A2A JSON-RPC endpoint (full pipeline via A2A protocol)               |
+| `POST` | `/a2a/rest`                    | A2A REST endpoint (same pipeline, REST variant)                      |
 
 ### Orchestrator dev server (CLI)
 
