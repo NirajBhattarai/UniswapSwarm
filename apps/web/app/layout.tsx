@@ -20,11 +20,11 @@ export const metadata: Metadata = {
   title: "Uniswap Swarm",
   description:
     "Multi-agent DeFi cockpit — Researcher · Planner · Risk · Strategy · Critic · Executor, powered by 0G and CopilotKit.",
-  icons: { icon: "/icon.svg", shortcut: "/icon.svg" },
+  icons: { icon: "/icon.png", shortcut: "/icon.png" },
   openGraph: {
     title: "Uniswap Swarm",
     description: "Multi-agent DeFi cockpit powered by 0G and CopilotKit.",
-    images: [{ url: "/logo.svg", width: 480, height: 120 }],
+    images: [{ url: "/banner.png" }],
   },
 };
 
