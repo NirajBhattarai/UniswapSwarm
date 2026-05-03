@@ -30,7 +30,7 @@ flowchart TB
         Server["Express Server\nserver.ts"]
         OrchestratorCore["SwarmOrchestrator\norchestrator.ts"]
         A2ARouterO["A2A JSON-RPC Router\na2aOrchestrator.ts"]
-        ENSReg["ENS Registry\nensRegistry.ts"]
+        ENSReg["ENS Registry\nensRegistry.ts\npublishAgentUrlsToEns()\nresolveAgentRegistry()\nGET /api/ens/agents"]
         HistoryMW["DynamoDB History\nhistoryStore.ts"]
         ManagedW["Managed Wallets\nmanagedWallets.ts"]
 
@@ -84,6 +84,9 @@ flowchart TB
     A2ARouterO --> AgentEndpoints
 
     ENSReg <-->|"read/write text[url]\non-chain"| ENSChain
+
+    %% Web resolves agent URLs from ENS on every request (5-min cache)
+    WebUI -->|"GET /api/ens/agents\n(ENS-resolved URLs → A2A routing)"| ENSReg
 
     %% Pipeline — strict sequential order
     OrchestratorCore --> ResearchAgent
@@ -663,6 +666,7 @@ sequenceDiagram
     participant Setup as scripts/setup-ens.ts
     participant ENS as ENS on Sepolia
     participant Orch as Orchestrator (startup)
+    participant Web as Web App (/api/copilotkit)
     participant Caller as External Caller
 
     Dev->>Setup: npm run setup-ens
@@ -676,6 +680,11 @@ sequenceDiagram
     ENS-->>Orch: addr + text[name] + text[url] per agent
     Note over Orch: cached in-process<br/>exposed at GET /api/ens/agents
 
+    Web->>Orch: GET /api/ens/agents (per request, 5-min cache)
+    Orch-->>Web: [{ agentId, url, addr, displayName }]
+    Note over Web: resolveSwarmAgentUrls() — ENS URL<br/>becomes the A2A routing target.<br/>Fallback: env var → base URL pattern.
+    Web->>Orch: A2A JSON-RPC to ENS-resolved agent URL
+
     Caller->>ENS: getResolver(name) → getText("url")
     ENS-->>Caller: live A2A endpoint URL
     Caller->>Orch: A2A JSON-RPC to resolved URL
@@ -683,15 +692,17 @@ sequenceDiagram
 
 ### How it's used in code
 
-| Location                                                                         | What it does                                                                                                                 |
-| -------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| [`scripts/setup-ens.ts`](./scripts/setup-ens.ts)                                 | **One-time setup** — creates subnames, sets `addr`, `text[name]`, and initial `text[url]` records                            |
-| [`scripts/approve-ens-delegate.ts`](./scripts/approve-ens-delegate.ts)           | Approves a delegate key so CI can update records without the owner key                                                       |
-| [`apps/orchestrator/src/ensRegistry.ts`](./apps/orchestrator/src/ensRegistry.ts) | `publishAgentUrlsToEns()` — **self-registration** at startup; `resolveAgentRegistry()` — **discovery** with in-process cache |
-| [`apps/orchestrator/src/index.ts`](./apps/orchestrator/src/index.ts)             | Calls both functions at boot; `publishAgentUrlsToEns` only runs when `A2A_PUBLIC_BASE_URL` is set                            |
-| [`apps/orchestrator/src/server.ts`](./apps/orchestrator/src/server.ts)           | `GET /api/ens/agents` — exposes resolved records (chain, chainId, agents[]) to dashboards                                    |
-| [`apps/orchestrator/src/a2aAgents.ts`](./apps/orchestrator/src/a2aAgents.ts)     | Each `AgentDescriptor` carries its `ensName` for card metadata                                                               |
-| [`scripts/call-agent.ts`](./scripts/call-agent.ts)                               | Dev script — resolves `text[url]` directly from ENS then sends an A2A JSON-RPC message                                       |
+| Location                                                                                               | What it does                                                                                                                 |
+| ------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------- |
+| [`scripts/setup-ens.ts`](./scripts/setup-ens.ts)                                                       | **One-time setup** — creates subnames, sets `addr`, `text[name]`, and initial `text[url]` records                            |
+| [`scripts/approve-ens-delegate.ts`](./scripts/approve-ens-delegate.ts)                                 | Approves a delegate key so CI can update records without the owner key                                                       |
+| [`apps/orchestrator/src/ensRegistry.ts`](./apps/orchestrator/src/ensRegistry.ts)                       | `publishAgentUrlsToEns()` — **self-registration** at startup; `resolveAgentRegistry()` — **discovery** with in-process cache |
+| [`apps/orchestrator/src/index.ts`](./apps/orchestrator/src/index.ts)                                   | Calls both functions at boot; `publishAgentUrlsToEns` only runs when `A2A_PUBLIC_BASE_URL` is set                            |
+| [`apps/orchestrator/src/server.ts`](./apps/orchestrator/src/server.ts)                                 | `GET /api/ens/agents` — exposes resolved records (chain, chainId, agents[]) to dashboards and the web app                   |
+| [`apps/orchestrator/src/a2aAgents.ts`](./apps/orchestrator/src/a2aAgents.ts)                           | Each `AgentDescriptor` carries its `ensName` for card metadata                                                               |
+| [`apps/web/lib/swarm-agents.ts`](./apps/web/lib/swarm-agents.ts)                                       | `resolveSwarmAgentUrls()` — fetches `/api/ens/agents` on every CopilotKit request; ENS `text[url]` is the A2A routing target; cached 5 min in-process |
+| [`apps/web/app/api/copilotkit/route.ts`](./apps/web/app/api/copilotkit/route.ts)                       | Awaits `resolveSwarmAgentUrls()` before registering agents with `A2AMiddlewareAgent` — ENS is in the hot path of every pipeline run |
+| [`scripts/call-agent.ts`](./scripts/call-agent.ts)                                                     | Dev script — resolves `text[url]` directly from ENS then sends an A2A JSON-RPC message                                       |
 
 ### Required env vars
 
@@ -702,7 +713,7 @@ sequenceDiagram
 | `ENS_RECORDS_PRIVATE_KEY` | Approved delegate key — preferred for CI and the orchestrator's self-registration |
 | `A2A_PUBLIC_BASE_URL`     | Public base URL written into `text[url]` on each agent's subname at startup       |
 
-> **ENS is discovery-only.** Once a URL is resolved, agents communicate over standard HTTP using the A2A JSON-RPC protocol. ENS adds zero latency to the hot path — `resolveAgentRegistry()` results are cached for the lifetime of the process.
+> **ENS is in the A2A routing hot path.** On every CopilotKit request, `resolveSwarmAgentUrls()` fetches live ENS records from `/api/ens/agents` and uses the on-chain `text[url]` as the routing target for all six agents. Records are cached in-process for 5 minutes — updating an ENS record on-chain propagates to live traffic within 5 minutes with no redeploy required. The orchestrator's `resolveAgentRegistry()` results are cached for the lifetime of the process, so Sepolia RPC calls are minimal.
 
 ### Setup commands
 
