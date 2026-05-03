@@ -28,7 +28,7 @@ import {
   resolveGeminiKey,
   ZERO_ADDRESS,
 } from "../../../lib/orchestration-agent";
-import { SWARM_AGENTS, getSwarmAgentUrls } from "../../../lib/swarm-agents";
+import { SWARM_AGENTS, resolveSwarmAgentUrls } from "../../../lib/swarm-agents";
 
 // Load env from web/.env.local first then project root .env so devs can keep
 // keys either place.
@@ -209,7 +209,9 @@ async function handleCopilotRequest(request: NextRequest) {
     walletAddress,
   });
 
-  const agentUrls = getSwarmAgentUrls();
+  // Resolve agent URLs — ENS text[url] is the primary source of truth;
+  // falls back to env vars then default base-URL pattern.
+  const agentUrls = await resolveSwarmAgentUrls();
 
   // Pre-flight: confirm every A2A agent's card is reachable. The
   // A2AMiddlewareAgent eagerly does Promise.all(getAgentCard()) inside its
