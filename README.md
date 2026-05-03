@@ -1,8 +1,8 @@
+# UniswapSwarm
+
 <p align="center">
   <img src="apps/web/public/banner.png" alt="UniswapSwarm" />
 </p>
-
-# UniswapSwarm
 
 An autonomous AI agent swarm that identifies and executes profitable, low-risk token swaps across **Uniswap V2/V3/V4 and UniswapX** (Ethereum mainnet). Built on top of the **0G Compute Network** for verifiable, decentralised LLM inference and **0G Storage** for on-chain audit trails, with a **CopilotKit + AG-UI / A2A** front-end for live, multi-agent observability and HITL approval.
 
