@@ -10,6 +10,81 @@ An autonomous AI agent swarm that identifies and executes profitable, low-risk t
 
 ---
 
+## ETHGlobal OpenAgents — Hackathon Submission
+
+**Tracks:**
+- 🤖 **Best Autonomous Agents, Swarms & iNFT Innovations** — 0G ($7,500)
+- 🦄 **Best Uniswap API Integration** — Uniswap Foundation ($5,000)
+- 🤖 **Best ENS Integration for AI Agents** — ENS ($2,500)
+- ✨ **Most Creative Use of ENS** — ENS ($2,500)
+
+### Demo
+
+| | |
+|---|---|
+| **Live demo** | https://uniswap-swarm-web.vercel.app/ |
+
+### Team
+
+| Name | GitHub | X |
+|------|--------|---|
+| Niraj Bhattarai | [@NirajBhattarai](https://github.com/NirajBhattarai) | [@nirajbhattara1](https://x.com/nirajbhattara1) |
+
+### Contract Addresses
+
+#### 0G Testnet
+
+| Contract | Address |
+|----------|---------|
+| 0G Flow (Storage entry point) | [`0xbD2C3F0E65eDF5582141C35969d66e205E00C9c8`](https://chainscan-galileo.0g.ai/address/0xbD2C3F0E65eDF5582141C35969d66e205E00C9c8) |
+
+#### ENS — Sepolia (chainId 11155111)
+
+| Contract | Address |
+|----------|---------|
+| ENS Registry | [`0x00000000000C2E074eC69A0dFb2997BA6C7d2e1e`](https://sepolia.etherscan.io/address/0x00000000000C2E074eC69A0dFb2997BA6C7d2e1e) |
+| Name Wrapper | [`0x0635513f179D50A207757E05759CbD106d7dFcE8`](https://sepolia.etherscan.io/address/0x0635513f179D50A207757E05759CbD106d7dFcE8) |
+| Public Resolver | [`0x8FADE66B79cC9f707aB26799354482EB93a5B7dD`](https://sepolia.etherscan.io/address/0x8FADE66B79cC9f707aB26799354482EB93a5B7dD) |
+
+#### Uniswap — Ethereum Mainnet
+
+| Contract | Address |
+|----------|---------|
+| Universal Router | [`0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45`](https://etherscan.io/address/0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45) |
+| V3 SwapRouter | [`0xE592427A0AEce92De3Edee1F18E0157C05861564`](https://etherscan.io/address/0xE592427A0AEce92De3Edee1F18E0157C05861564) |
+
+### 0G Protocol Features & SDKs Used
+
+| Feature | How it's used |
+|---------|---------------|
+| **0G Compute Network** | All six agent LLM calls are routed through the [0G Serving Broker](https://github.com/0glabs/0g-serving-broker) (`@0glabs/0g-serving-broker`). The `@swarm/compute` package wraps the broker — it auto-manages ledger deposits, selects an available inference provider, and issues verifiable inference requests. Model: `qwen/qwen-2.5-7b-instruct` (configurable via `ZG_INFERENCE_MODEL`). |
+| **0G Storage** | Every agent write (`researcher/report`, `planner/plan`, `risk/assessments`, `strategy/proposal`, `critic/critique`, `executor/result`) is uploaded to the 0G Storage network via `@0gfoundation/0g-ts-sdk`. Each upload returns a root hash (CID) that is stored in `BlackboardMemory` and surfaced in the UI as a live audit trail. |
+| **0G Flow Contract** | Used by the 0G Storage SDK as the on-chain entry point for blob submissions (`0xbD2C3F0E65eDF5582141C35969d66e205E00C9c8` on 0G testnet). |
+
+### Uniswap Protocol Features Used
+
+| Feature | How it's used |
+|---------|---------------|
+| **Uniswap V2 / V3 / V4 pools** | The Researcher agent fetches live pool snapshots across all three pool versions to build the candidate token feed. |
+| **UniswapX** | Included in the pool snapshot fetch; the Researcher surfaces UniswapX order-flow data alongside on-chain pool data. |
+| **Uniswap Trading API** | The Executor calls `check_approval → quote → swap` via the [Uniswap Trading API](https://developers.uniswap.org) to get an optimised swap route and submit (or simulate) the transaction. |
+| **Universal Router** | `0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45` — execution target for multi-hop and multi-protocol swaps. |
+
+> **Uniswap prize requirement:** Developer feedback is documented in [FEEDBACK.md](./FEEDBACK.md) — a detailed write-up of DX gaps, missing endpoints, and feature requests encountered while integrating the Uniswap API and `uniswap-ai` repo.
+
+### ENS Features Used
+
+| Feature | How it's used |
+|---------|---------------|
+| **ENS subnames** | Each of the six agents has its own ENS subname under `uniswapswarm.eth` on Sepolia (e.g. `researcher.uniswapswarm.eth`). |
+| **`addr` records** | `setAddr()` is called for every subname during setup (`scripts/setup-ens.ts`), giving each agent an on-chain Ethereum address. |
+| **`text[name]` records** | Human-readable display name stored per agent (e.g. `Researcher Agent`). |
+| **`text[url]` records** | The orchestrator self-registers its live A2A endpoint URL into each agent's `text[url]` record at startup (`publishAgentUrlsToEns()`). No redeploy needed — updating a record on-chain propagates to live traffic within 5 minutes. |
+| **ENS as a live service registry** | This is the creative angle: ENS `text[url]` is the routing hot path for every CopilotKit request. The web app calls `resolveSwarmAgentUrls()` → `GET /api/ens/agents` → reads on-chain `text[url]` per agent and uses those as the A2A routing targets. ENS is not cosmetic — remove it and the multi-agent pipeline cannot route. |
+| **Delegate approval** | `scripts/approve-ens-delegate.ts` approves a separate key so CI/CD and the orchestrator can update `text[url]` records without exposing the domain owner key. |
+
+---
+
 ## Architecture
 
 The swarm runs a sequential pipeline of specialised agents that share a common **Blackboard Memory** per cycle. Each agent writes its output to in-process memory that is simultaneously persisted to **0G Storage** as an immutable, on-chain audit trail.
